@@ -44,3 +44,24 @@ test("persists to disk and adds more files after reopening", async () => {
         rmSync(dir, { recursive: true, force: true });
     }
 });
+
+test("save() writes an in-memory graph to a LadybugDB file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
+    const dbPath = join(dir, "saved.lbug");
+    const count = "MATCH (n) WITH count(n) AS n MATCH ()-[e:CHILD]->() RETURN n, count(e) AS e";
+    try {
+        const g = await taintwire.import(code, { filename: "app.js" });
+        const before = await g.query(count);
+        await g.save(dbPath);
+        await expect(g.save(dbPath)).rejects.toThrow(/refusing to overwrite/);
+        await g.close();
+
+        const saved = await taintwire.TaintGraph.open(dbPath);
+        expect(await saved.query(count)).toEqual(before);
+        const [si] = await saved.query("MATCH (c:CallExpression)-[:CHILD {key: 'callee'}]->(:Identifier {name: 'setInterval'}) RETURN c.line AS line");
+        expect(si.line).toBe(30);
+        await saved.close();
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});

@@ -20,7 +20,7 @@ const rows = await graph.query(
 await graph.close();
 ```
 
-Persist with `taintwire.import(code, { dbPath: "graph.lbug" })`, reopen with `taintwire.TaintGraph.open("graph.lbug")`. The raw Ladybug handles are on `graph.db` / `graph.connection`.
+Persist with `taintwire.import(code, { dbPath: "graph.lbug" })`, or write an in-memory graph out with `await graph.save("graph.lbug")` (refuses to overwrite). Reopen with `taintwire.TaintGraph.open("graph.lbug")`. The raw Ladybug handles are on `graph.db` / `graph.connection`.
 
 ## Graph model
 

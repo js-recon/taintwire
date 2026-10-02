@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { parse, type ParserOptions } from "@babel/parser";
 import { VISITOR_KEYS, type Node } from "@babel/types";
 import lbug from "@ladybugdb/core";
@@ -130,22 +131,31 @@ export class TaintGraph {
     /** Parse `code` and load its AST into the graph. Returns the id of the File node. */
     async add(code: string, filename = "input.js"): Promise<string> {
         const { rootId, nodes, edges } = flatten(parse(code, PARSER_OPTIONS) as unknown as Node, filename);
-
-        // COPY is Ladybug's bulk path; UNWIND+MATCH+CREATE for edges was ~10x slower.
-        const cols = Object.keys(COLUMNS).map((c) => `r.${c}`).join(", ");
-        for (const [type, rows] of nodes) {
-            await this.ensureNodeTable(type);
-            await this.batched(`COPY \`${type}\` FROM (UNWIND $rows AS r RETURN ${cols})`, rows);
-        }
-        for (const [pair, rows] of edges) {
-            const [from, to] = pair.split("\0");
-            await this.ensureChildPair(from, to);
-            await this.batched(
-                `COPY CHILD FROM (UNWIND $rows AS r RETURN r.from, r.to, r.key, r.idx) (from='${from}', to='${to}')`,
-                rows
-            );
-        }
+        await this.load(nodes, edges);
         return rootId;
+    }
+
+    /**
+     * Write the whole graph to a new LadybugDB file at `dbPath`.
+     * Copies rows itself: Ladybug's EXPORT DATABASE rejects a rel table with multiple FROM/TO pairs.
+     */
+    async save(dbPath: string): Promise<void> {
+        if (existsSync(dbPath)) throw new Error(`taintwire: refusing to overwrite existing ${dbPath}`);
+        const nodes = new Map<string, Row[]>();
+        const edges = new Map<string, Edge[]>();
+        const cols = Object.keys(COLUMNS).map((c) => `n.${c} AS ${c}`).join(", ");
+        for (const type of this.tables) nodes.set(type, (await this.query(`MATCH (n:\`${type}\`) RETURN ${cols}`)) as Row[]);
+        for (const pair of this.childPairs) {
+            const [from, to] = pair.split("\0");
+            const q = `MATCH (a:\`${from}\`)-[e:CHILD]->(b:\`${to}\`) RETURN a.id AS from, b.id AS to, e.key AS key, e.idx AS idx`;
+            edges.set(pair, (await this.query(q)) as Edge[]);
+        }
+        const out = await TaintGraph.open(dbPath);
+        try {
+            await out.load(nodes, edges);
+        } finally {
+            await out.close();
+        }
     }
 
     /** Run an openCypher query. For multi-statement input, returns the last statement's rows. */
@@ -159,6 +169,24 @@ export class TaintGraph {
     async close(): Promise<void> {
         await this.connection.close();
         await this.db.close();
+    }
+
+    // COPY is Ladybug's bulk path; UNWIND+MATCH+CREATE for edges was ~4x slower overall.
+    private async load(nodes: Map<string, Row[]>, edges: Map<string, Edge[]>) {
+        const cols = Object.keys(COLUMNS).map((c) => `r.${c}`).join(", ");
+        for (const [type, rows] of nodes) {
+            await this.ensureNodeTable(type);
+            if (rows.length) await this.batched(`COPY \`${type}\` FROM (UNWIND $rows AS r RETURN ${cols})`, rows);
+        }
+        for (const [pair, rows] of edges) {
+            const [from, to] = pair.split("\0");
+            await this.ensureChildPair(from, to);
+            if (rows.length)
+                await this.batched(
+                    `COPY CHILD FROM (UNWIND $rows AS r RETURN r.from, r.to, r.key, r.idx) (from='${from}', to='${to}')`,
+                    rows
+                );
+        }
     }
 
     private async batched(cypher: string, rows: object[]) {
