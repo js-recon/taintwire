@@ -12,6 +12,8 @@ export const PARSER_OPTIONS: ParserOptions = {
 };
 
 const BATCH_SIZE = 5000;
+// Not a Babel node type, so it can't collide with an AST table.
+const SOURCE = "Source";
 
 // Columns shared by every AST node table. `end` is a Cypher keyword, hence *Offset.
 const COLUMNS = {
@@ -113,13 +115,18 @@ export class TaintGraph {
         private readonly childPairs: Set<string>
     ) {}
 
+    // ponytail: unbounded per-file source cache for code(); add LRU eviction if graphs outgrow memory.
+    private readonly sources = new Map<string, string>();
+
     /** Open (or create) a graph. Defaults to in-memory; pass a path to persist. */
     static async open(dbPath = ":memory:"): Promise<TaintGraph> {
         const db = new lbug.Database(dbPath);
         const conn = new lbug.Connection(db);
         const g = new TaintGraph(db, conn, new Set(), new Set());
+        // Each file's source is stored once; node code is sliced from it by offset (see code()).
+        await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SOURCE}(file STRING PRIMARY KEY, code STRING)`);
         for (const t of await g.query("CALL show_tables() RETURN name, type")) {
-            if (t.type === "NODE") g.tables.add(t.name as string);
+            if (t.type === "NODE" && t.name !== SOURCE) g.tables.add(t.name as string);
             if (t.type === "REL" && t.name === "CHILD") {
                 for (const c of await g.query("CALL show_connection('CHILD') RETURN *"))
                     g.childPairs.add(`${c["source table name"]}\0${c["destination table name"]}`);
@@ -131,8 +138,26 @@ export class TaintGraph {
     /** Parse `code` and load its AST into the graph. Returns the id of the File node. */
     async add(code: string, filename = "input.js"): Promise<string> {
         const { rootId, nodes, edges } = flatten(parse(code, PARSER_OPTIONS) as unknown as Node, filename);
+        // Source first: a duplicate filename fails on the primary key before any nodes are loaded.
+        await this.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, { file: filename, code });
         await this.load(nodes, edges);
         return rootId;
+    }
+
+    /** The source code of the node with this id. */
+    async code(id: string): Promise<string> {
+        const type = id.slice(0, id.lastIndexOf("_"));
+        if (!this.tables.has(type)) throw new Error(`taintwire: no node ${id}`);
+        const [n] = await this.query(`MATCH (n:\`${type}\` {id: $id}) RETURN n.file AS file, n.startOffset AS s, n.endOffset AS e`, { id });
+        if (!n) throw new Error(`taintwire: no node ${id}`);
+        let src = this.sources.get(n.file as string);
+        if (src === undefined) {
+            const [row] = await this.query(`MATCH (s:${SOURCE} {file: $file}) RETURN s.code AS code`, { file: n.file });
+            if (!row) throw new Error(`taintwire: no source stored for ${n.file}`);
+            this.sources.set(n.file as string, (src = row.code as string));
+        }
+        // Sliced in JS: Babel offsets are UTF-16 units, Ladybug's substring() counts code points.
+        return src.slice(Number(n.s), Number(n.e));
     }
 
     /**
@@ -150,8 +175,10 @@ export class TaintGraph {
             const q = `MATCH (a:\`${from}\`)-[e:CHILD]->(b:\`${to}\`) RETURN a.id AS from, b.id AS to, e.key AS key, e.idx AS idx`;
             edges.set(pair, (await this.query(q)) as Edge[]);
         }
+        const sources = await this.query(`MATCH (s:${SOURCE}) RETURN s.file AS file, s.code AS code`);
         const out = await TaintGraph.open(dbPath);
         try {
+            for (const s of sources) await out.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, s);
             await out.load(nodes, edges);
         } finally {
             await out.close();

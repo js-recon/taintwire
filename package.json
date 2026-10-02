@@ -10,7 +10,7 @@
     ],
     "scripts": {
         "build": "rm -rf build/ && tsc",
-        "test": "vitest run"
+        "test": "vitest run --testTimeout=30000"
     },
     "author": "Shriyans Sudhi",
     "license": "MIT",

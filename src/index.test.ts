@@ -65,3 +65,25 @@ test("save() writes an in-memory graph to a LadybugDB file", async () => {
         rmSync(dir, { recursive: true, force: true });
     }
 });
+
+test("code() resolves a node id to its source, across save()", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
+    try {
+        const g = await taintwire.import('const s = "😀"; fetch(location.hash);', { filename: "c.js" });
+        const id = "MATCH (c:CallExpression) RETURN c.id AS id";
+        const [{ id: callId }] = await g.query(id);
+        // the emoji is 2 UTF-16 units: a code-point-based slice would be off by one
+        expect(await g.code(callId as string)).toBe("fetch(location.hash)");
+        await expect(g.code("CallExpression_nope")).rejects.toThrow(/no node/);
+        await expect(g.add("x", "c.js")).rejects.toThrow();
+
+        const dbPath = join(dir, "c.lbug");
+        await g.save(dbPath);
+        await g.close();
+        const saved = await taintwire.TaintGraph.open(dbPath);
+        expect(await saved.code(callId as string)).toBe("fetch(location.hash)");
+        await saved.close();
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
