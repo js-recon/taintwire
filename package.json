@@ -1,0 +1,34 @@
+{
+    "name": "@js-recon/taintwire",
+    "version": "0.0.1",
+    "description": "Graph-based (LadybugDB/openCypher) AST and taint analysis for JavaScript",
+    "type": "module",
+    "main": "build/index.js",
+    "types": "build/index.d.ts",
+    "files": [
+        "build"
+    ],
+    "scripts": {
+        "build": "rm -rf build/ && tsc",
+        "test": "vitest run"
+    },
+    "author": "Shriyans Sudhi",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/js-recon/taintwire.git"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "dependencies": {
+        "@babel/parser": "8.0.4",
+        "@babel/types": "8.0.4",
+        "@ladybugdb/core": "0.21.2"
+    },
+    "devDependencies": {
+        "@types/node": "24.12.4",
+        "typescript": "5.9.2",
+        "vitest": "4.1.11"
+    }
+}
