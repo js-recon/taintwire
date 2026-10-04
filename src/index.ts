@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { parse, type ParserOptions } from "@babel/parser";
 import { VISITOR_KEYS, type Node } from "@babel/types";
 import lbug from "@ladybugdb/core";
+import { cs_mast_init, CS_MAST_SIGNATURE_KEY, ParseError, type CsMastConfig } from "@shriyanss/cs-mast";
 
 // Same options as js-recon, so both see the same AST for the same input.
 export const PARSER_OPTIONS: ParserOptions = {
@@ -11,7 +12,35 @@ export const PARSER_OPTIONS: ParserOptions = {
     errorRecovery: true,
 };
 
+/** `cs-mast` (default) is the Babel AST with a CS-MAST-S signature on each hashed node; `babel` is the plain AST. */
+export type Parser = "cs-mast" | "babel";
+
+// Every scat category; prsr/sourceType match js-recon's CS_MAST_CONFIG so signatures are comparable.
+export const CS_MAST_CONFIG: CsMastConfig = {
+    hash: "sha256",
+    lang: "js",
+    prsr: "@babel/parser",
+    scat: ["lit", "id", "op", "decl", "loop", "cond", "name", "val", "op_name"],
+    sinc: [],
+    sourceType: "unambiguous",
+};
+
+function parseAst(code: string, parser: Parser): Node {
+    if (parser === "babel") return parse(code, PARSER_OPTIONS) as unknown as Node;
+    try {
+        // cs-mast attaches signatures to the raw Babel nodes, so the File node is a normal Babel AST.
+        return cs_mast_init(code, CS_MAST_CONFIG).root._raw as Node;
+    } catch (e) {
+        // cs-mast parses without errorRecovery; the babel parser tolerates more.
+        if (e instanceof ParseError) throw new Error(`taintwire: ${e.message} (try { parser: "babel" })`, { cause: e });
+        throw e;
+    }
+}
+
 const BATCH_SIZE = 5000;
+// Ladybug's default (8 TiB) mmap reservation is only released on GC, not close(), so a process ran out of
+// address space after ~9 opens. 1 TiB is far beyond any AST graph.
+const MAX_DB_SIZE = 2 ** 40;
 // Not a Babel node type, so it can't collide with an AST table.
 const SOURCE = "Source";
 
@@ -30,10 +59,11 @@ const COLUMNS = {
     value: "STRING",
     operator: "STRING",
     props: "STRING",
+    hash: "STRING", // CS-MAST-S signature; null for the babel parser and for nodes cs-mast doesn't hash
 } as const;
 
 // Node fields that are either columns already or noise for the graph.
-const SKIP_PROPS = new Set(["type", "start", "end", "loc", "range", "leadingComments", "trailingComments", "innerComments", "comments", "errors", "tokens"]);
+const SKIP_PROPS = new Set(["type", "start", "end", "loc", "range", "leadingComments", "trailingComments", "innerComments", "comments", "errors", "tokens", CS_MAST_SIGNATURE_KEY]);
 
 type Row = Record<keyof typeof COLUMNS, string | number | null>;
 type Edge = { from: string; to: string; key: string; idx: number };
@@ -85,7 +115,7 @@ export function flatten(ast: Node, file: string) {
             });
         }
 
-        const n = node as Node & { name?: unknown; value?: unknown; operator?: unknown };
+        const n = node as Node & { name?: unknown; value?: unknown; operator?: unknown; [CS_MAST_SIGNATURE_KEY]?: string };
         if (!nodes.has(node.type)) nodes.set(node.type, []);
         nodes.get(node.type)!.push({
             id,
@@ -101,6 +131,7 @@ export function flatten(ast: Node, file: string) {
             value: scalar(n.value),
             operator: typeof n.operator === "string" ? n.operator : null,
             props: JSON.stringify(props, (_, v) => (typeof v === "bigint" ? v.toString() : v)),
+            hash: n[CS_MAST_SIGNATURE_KEY] ?? null,
         });
     }
     return { rootId: idOf(ast), nodes, edges };
@@ -112,17 +143,18 @@ export class TaintGraph {
         readonly db: lbug.Database,
         readonly connection: lbug.Connection,
         private readonly tables: Set<string>,
-        private readonly childPairs: Set<string>
+        private readonly childPairs: Set<string>,
+        private readonly parser: Parser
     ) {}
 
     // ponytail: unbounded per-file source cache for code(); add LRU eviction if graphs outgrow memory.
     private readonly sources = new Map<string, string>();
 
-    /** Open (or create) a graph. Defaults to in-memory; pass a path to persist. */
-    static async open(dbPath = ":memory:"): Promise<TaintGraph> {
-        const db = new lbug.Database(dbPath);
+    /** Open (or create) a graph. Defaults to in-memory; pass a path to persist. `parser` applies to add(). */
+    static async open(dbPath = ":memory:", { parser = "cs-mast" }: { parser?: Parser } = {}): Promise<TaintGraph> {
+        const db = new lbug.Database(dbPath, 0, true, false, MAX_DB_SIZE);
         const conn = new lbug.Connection(db);
-        const g = new TaintGraph(db, conn, new Set(), new Set());
+        const g = new TaintGraph(db, conn, new Set(), new Set(), parser);
         // Each file's source is stored once; node code is sliced from it by offset (see code()).
         await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SOURCE}(file STRING PRIMARY KEY, code STRING)`);
         for (const t of await g.query("CALL show_tables() RETURN name, type")) {
@@ -137,7 +169,7 @@ export class TaintGraph {
 
     /** Parse `code` and load its AST into the graph. Returns the id of the File node. */
     async add(code: string, filename = "input.js"): Promise<string> {
-        const { rootId, nodes, edges } = flatten(parse(code, PARSER_OPTIONS) as unknown as Node, filename);
+        const { rootId, nodes, edges } = flatten(parseAst(code, this.parser), filename);
         // Source first: a duplicate filename fails on the primary key before any nodes are loaded.
         await this.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, { file: filename, code });
         await this.load(nodes, edges);
@@ -241,8 +273,8 @@ export class TaintGraph {
     }
 }
 
-async function importCode(code: string, opts: { filename?: string; dbPath?: string } = {}): Promise<TaintGraph> {
-    const graph = await TaintGraph.open(opts.dbPath);
+async function importCode(code: string, opts: { filename?: string; dbPath?: string; parser?: Parser } = {}): Promise<TaintGraph> {
+    const graph = await TaintGraph.open(opts.dbPath, { parser: opts.parser });
     await graph.add(code, opts.filename);
     return graph;
 }

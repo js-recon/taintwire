@@ -24,7 +24,8 @@
     "dependencies": {
         "@babel/parser": "8.0.4",
         "@babel/types": "8.0.4",
-        "@ladybugdb/core": "0.21.2"
+        "@ladybugdb/core": "0.21.2",
+        "@shriyanss/cs-mast": "0.1.8"
     },
     "devDependencies": {
         "@types/node": "24.12.4",
