@@ -88,17 +88,20 @@ test("code() resolves a node id to its source, across save()", async () => {
     }
 });
 
-test("cs-mast parser (default) attaches a CS-MAST-S signature to hashed nodes", async () => {
+test("cs-mast parser (default) hashes every node", async () => {
     const g = await taintwire.import(code, { filename: "app.abc123.js" });
-    const ids = await g.query("MATCH (n:Identifier) RETURN n.name AS name, n.hash AS hash");
-    expect(ids.length).toBeGreaterThan(0);
-    for (const r of ids) expect(r.hash).toMatch(/^\$v=1\$hash=sha256,lang=js,prsr=-babel\/parser,scat=[a-z_]+\$[0-9a-f]{64}$/);
+    const [all] = await g.query("MATCH (n) WHERE n.type IS NOT NULL RETURN count(*) AS nodes, count(n.hash) AS hashed");
+    expect(all.hashed).toBe(all.nodes);
+    for (const r of await g.query("MATCH (n) WHERE n.type IS NOT NULL RETURN DISTINCT n.hash AS hash")) expect(r.hash).toMatch(/^[0-9a-f]{64}$/);
+    // non-scat types (sinc) are Merkle hashes over their children: different calls, different hashes
+    const [calls] = await g.query("MATCH (c:CallExpression)-[:CHILD {key: 'callee'}]->(:Identifier {name: 'setInterval'}), (d:CallExpression)-[:CHILD {key: 'callee'}]->(:Identifier {name: 'n'}) RETURN c.hash = d.hash AS eq LIMIT 1");
+    expect(calls.eq).toBe(false);
     // name is in scat, so identical names hash identically and different names don't
     const [same] = await g.query("MATCH (a:Identifier {name: 'e'}), (b:Identifier {name: 'e'}) WHERE a.id < b.id RETURN a.hash = b.hash AS eq LIMIT 1");
     expect(same.eq).toBe(true);
     const [diff] = await g.query("MATCH (a:Identifier {name: 'e'}), (b:Identifier {name: 't'}) RETURN a.hash = b.hash AS eq LIMIT 1");
     expect(diff.eq).toBe(false);
-    // the signature is a node property (column), not buried in props
+    // the hash is a node property (column), not buried in props
     const [p] = await g.query("MATCH (n:Identifier) RETURN n.props AS props LIMIT 1");
     expect(JSON.parse(p.props as string)).not.toHaveProperty("cs-mast-s-hash");
     await g.close();

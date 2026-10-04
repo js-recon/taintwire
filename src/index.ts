@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { parse, type ParserOptions } from "@babel/parser";
 import { VISITOR_KEYS, type Node } from "@babel/types";
 import lbug from "@ladybugdb/core";
@@ -12,16 +13,21 @@ export const PARSER_OPTIONS: ParserOptions = {
     errorRecovery: true,
 };
 
-/** `cs-mast` (default) is the Babel AST with a CS-MAST-S signature on each hashed node; `babel` is the plain AST. */
+/** `cs-mast` (default) is the Babel AST with a CS-MAST-S hash on every node; `babel` is the plain AST. */
 export type Parser = "cs-mast" | "babel";
 
-// Every scat category; prsr/sourceType match js-recon's CS_MAST_CONFIG so signatures are comparable.
+// Node types come from the @babel/types that cs-mast parses with (Babel 7), not ours (Babel 8).
+const require = createRequire(import.meta.url);
+const csMastBabelTypes: typeof import("@babel/types") = createRequire(require.resolve("@shriyanss/cs-mast"))("@babel/types");
+
+// scat only covers 25 node types; every other type goes in sinc so every node is hashed.
+// cs-mast drops sinc entries already covered by scat, so passing all types is fine.
 export const CS_MAST_CONFIG: CsMastConfig = {
     hash: "sha256",
     lang: "js",
     prsr: "@babel/parser",
     scat: ["lit", "id", "op", "decl", "loop", "cond", "name", "val", "op_name"],
-    sinc: [],
+    sinc: Object.keys(csMastBabelTypes.VISITOR_KEYS),
     sourceType: "unambiguous",
 };
 
@@ -59,7 +65,7 @@ const COLUMNS = {
     value: "STRING",
     operator: "STRING",
     props: "STRING",
-    hash: "STRING", // CS-MAST-S signature; null for the babel parser and for nodes cs-mast doesn't hash
+    hash: "STRING", // hex digest of the CS-MAST-S signature; null for the babel parser
 } as const;
 
 // Node fields that are either columns already or noise for the graph.
@@ -131,7 +137,8 @@ export function flatten(ast: Node, file: string) {
             value: scalar(n.value),
             operator: typeof n.operator === "string" ? n.operator : null,
             props: JSON.stringify(props, (_, v) => (typeof v === "bigint" ? v.toString() : v)),
-            hash: n[CS_MAST_SIGNATURE_KEY] ?? null,
+            // Only the digest: the signature prefix lists every sinc type (~4.6 KB) and is identical on every node.
+            hash: n[CS_MAST_SIGNATURE_KEY]?.slice(n[CS_MAST_SIGNATURE_KEY].lastIndexOf("$") + 1) ?? null,
         });
     }
     return { rootId: idOf(ast), nodes, edges };
