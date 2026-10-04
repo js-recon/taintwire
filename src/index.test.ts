@@ -117,3 +117,21 @@ test("babel parser builds the same tree without signatures", async () => {
     await cs.close();
     await babel.close();
 });
+
+test("cs-mast hashes every node type in modern JS, TypeScript and JSX", async () => {
+    const g = await taintwire.import(readFileSync(new URL("../test/modern.js", import.meta.url), "utf-8"), { filename: "modern.js" });
+    await g.add(readFileSync(new URL("../test/component.tsx", import.meta.url), "utf-8"), "component.tsx");
+    const types = await g.query("MATCH (n) WHERE n.type IS NOT NULL RETURN n.type AS type, count(*) AS total, count(n.hash) AS hashed");
+    expect(types.length).toBeGreaterThan(100);
+    expect(types.filter((t) => t.hashed !== t.total).map((t) => t.type)).toEqual([]);
+    await g.close();
+});
+
+test("cs-mast parse errors point at the babel parser, which recovers", async () => {
+    const broken = "let a = 1; let a = 2;"; // redeclaration: recoverable error
+    await expect(taintwire.import(broken)).rejects.toThrow(/try \{ parser: "babel" \}/);
+    const g = await taintwire.import(broken, { parser: "babel" });
+    const [d] = await g.query("MATCH (d:VariableDeclaration) RETURN count(*) AS n");
+    expect(d.n).toBe(2);
+    await g.close();
+});
