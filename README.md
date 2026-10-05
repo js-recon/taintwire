@@ -50,3 +50,11 @@ npm install
 npm test
 npm run build
 ```
+
+## Docs
+
+API and implementation docs are a Docusaurus site in [`docs/`](docs/):
+
+```sh
+cd docs && npm install && npm start
+```
