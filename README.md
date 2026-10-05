@@ -13,7 +13,7 @@ const graph = await taintwire.import(code, { filename: "app.abc123.js" }); // in
 await graph.add(otherCode, "chunk.js"); // more files into the same graph
 
 const rows = await graph.query(
-    `MATCH (c:CallExpression)-[:CHILD {key: 'callee'}]->(:Identifier {name: $fn})
+    `MATCH (c:CallExpression)-[:SON {key: 'callee'}]->(:Identifier {name: $fn})
      RETURN c.file, c.line, c.col`,
     { fn: "eval" }
 );
@@ -34,7 +34,7 @@ Both produce the same tree.
 ## Graph model
 
 - Every Babel node becomes a graph node **labelled by its AST type** (`File`, `Program`, `CallExpression`, ...), id `<type>_<random hex>`.
-- Parent → child edges are `CHILD {key, idx}`: `key` is the Babel field (`callee`, `arguments`, `body`, ...), `idx` the array index or `-1`.
+- Parent → child edges are `SON {key, idx}`: `key` is the Babel field (`callee`, `arguments`, `body`, ...), `idx` the array index or `-1`.
 - Node columns: `id, type, file, startOffset, endOffset, line, col, endLine, endCol, name, value, operator, props, hash`.
   - `name` (identifiers), `value` (literals, stringified; template `cooked`), `operator` are pulled out for querying.
   - `props` is a JSON string of the remaining fields; child-node fields are replaced with `{type, slug_ref}` pointing at the child's id.

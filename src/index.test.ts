@@ -11,21 +11,21 @@ test("imports webpack chunk as AST graph", async () => {
 
     // File -> Program -> ExpressionStatement -> CallExpression (the .push([...]))
     const [root] = await g.query(
-        "MATCH (f:File)-[:CHILD {key: 'program'}]->(:Program)-[:CHILD {key: 'body', idx: 0}]->(:ExpressionStatement)-[:CHILD]->(c:CallExpression) RETURN f.file AS file, c.props AS props"
+        "MATCH (f:File)-[:SON {key: 'program'}]->(:Program)-[:SON {key: 'body', idx: 0}]->(:ExpressionStatement)-[:SON]->(c:CallExpression) RETURN f.file AS file, c.props AS props"
     );
     expect(root.file).toBe("app.abc123.js");
 
-    // child properties are substituted with slug refs that point at the CHILD edge target
+    // child properties are substituted with slug refs that point at the SON edge target
     const callee = JSON.parse(root.props as string).callee;
     expect(callee.type).toBe("MemberExpression");
-    const [m] = await g.query("MATCH (m:MemberExpression {id: $id})-[:CHILD {key: 'property'}]->(p:Identifier) RETURN p.name AS name", { id: callee.slug_ref });
+    const [m] = await g.query("MATCH (m:MemberExpression {id: $id})-[:SON {key: 'property'}]->(p:Identifier) RETURN p.name AS name", { id: callee.slug_ref });
     expect(m.name).toBe("push");
 
     // webpack module ids are keys of the modules object
-    const mods = await g.query("MATCH (:ObjectProperty)-[:CHILD {key: 'key'}]->(k:NumericLiteral) WHERE k.value IN ['468', '469'] RETURN k.value AS v ORDER BY v");
+    const mods = await g.query("MATCH (:ObjectProperty)-[:SON {key: 'key'}]->(k:NumericLiteral) WHERE k.value IN ['468', '469'] RETURN k.value AS v ORDER BY v");
     expect(mods.map((r) => r.v)).toEqual(["468", "469"]);
 
-    const [si] = await g.query("MATCH (c:CallExpression)-[:CHILD {key: 'callee'}]->(:Identifier {name: 'setInterval'}) RETURN c.line AS line");
+    const [si] = await g.query("MATCH (c:CallExpression)-[:SON {key: 'callee'}]->(:Identifier {name: 'setInterval'}) RETURN c.line AS line");
     expect(si.line).toBe(30);
     await g.close();
 });
@@ -36,7 +36,7 @@ test("persists to disk and adds more files after reopening", async () => {
     try {
         await (await taintwire.import(code, { filename: "a.js", dbPath })).close();
         const g = await taintwire.TaintGraph.open(dbPath);
-        await g.add("fetch(location.hash)", "b.js"); // reuses existing tables/CHILD pairs, adds new ones
+        await g.add("fetch(location.hash)", "b.js"); // reuses existing tables/SON pairs, adds new ones
         const files = await g.query("MATCH (f:File) RETURN f.file AS file ORDER BY file");
         expect(files.map((r) => r.file)).toEqual(["a.js", "b.js"]);
         await g.close();
@@ -48,7 +48,7 @@ test("persists to disk and adds more files after reopening", async () => {
 test("save() writes an in-memory graph to a LadybugDB file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
     const dbPath = join(dir, "saved.lbug");
-    const count = "MATCH (n) WITH count(n) AS n MATCH ()-[e:CHILD]->() RETURN n, count(e) AS e";
+    const count = "MATCH (n) WITH count(n) AS n MATCH ()-[e:SON]->() RETURN n, count(e) AS e";
     try {
         const g = await taintwire.import(code, { filename: "app.js" });
         const before = await g.query(count);
@@ -58,7 +58,7 @@ test("save() writes an in-memory graph to a LadybugDB file", async () => {
 
         const saved = await taintwire.TaintGraph.open(dbPath);
         expect(await saved.query(count)).toEqual(before);
-        const [si] = await saved.query("MATCH (c:CallExpression)-[:CHILD {key: 'callee'}]->(:Identifier {name: 'setInterval'}) RETURN c.line AS line");
+        const [si] = await saved.query("MATCH (c:CallExpression)-[:SON {key: 'callee'}]->(:Identifier {name: 'setInterval'}) RETURN c.line AS line");
         expect(si.line).toBe(30);
         await saved.close();
     } finally {
@@ -94,7 +94,7 @@ test("cs-mast parser (default) hashes every node", async () => {
     expect(all.hashed).toBe(all.nodes);
     for (const r of await g.query("MATCH (n) WHERE n.type IS NOT NULL RETURN DISTINCT n.hash AS hash")) expect(r.hash).toMatch(/^[0-9a-f]{64}$/);
     // non-scat types (sinc) are Merkle hashes over their children: different calls, different hashes
-    const [calls] = await g.query("MATCH (c:CallExpression)-[:CHILD {key: 'callee'}]->(:Identifier {name: 'setInterval'}), (d:CallExpression)-[:CHILD {key: 'callee'}]->(:Identifier {name: 'n'}) RETURN c.hash = d.hash AS eq LIMIT 1");
+    const [calls] = await g.query("MATCH (c:CallExpression)-[:SON {key: 'callee'}]->(:Identifier {name: 'setInterval'}), (d:CallExpression)-[:SON {key: 'callee'}]->(:Identifier {name: 'n'}) RETURN c.hash = d.hash AS eq LIMIT 1");
     expect(calls.eq).toBe(false);
     // name is in scat, so identical names hash identically and different names don't
     const [same] = await g.query("MATCH (a:Identifier {name: 'e'}), (b:Identifier {name: 'e'}) WHERE a.id < b.id RETURN a.hash = b.hash AS eq LIMIT 1");

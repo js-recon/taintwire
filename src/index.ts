@@ -82,7 +82,7 @@ const scalar = (v: unknown): string | null => {
     return null;
 };
 
-/** Flatten a Babel AST into per-type node rows and per-(parent,child)-type CHILD edges. */
+/** Flatten a Babel AST into per-type node rows and per-(parent,child)-type SON edges. */
 export function flatten(ast: Node, file: string) {
     const ids = new Map<Node, string>();
     const idOf = (n: Node) => {
@@ -110,7 +110,7 @@ export function flatten(ast: Node, file: string) {
                 props[k] = v;
                 continue;
             }
-            // Child nodes become CHILD edges; the property keeps a slug reference to the child.
+            // Child nodes become SON edges; the property keeps a slug reference to the child.
             props[k] = Array.isArray(v) ? v.map(ref) : ref(v);
             (Array.isArray(v) ? v : [v]).forEach((child, i) => {
                 if (!isNode(child)) return;
@@ -166,8 +166,8 @@ export class TaintGraph {
         await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SOURCE}(file STRING PRIMARY KEY, code STRING)`);
         for (const t of await g.query("CALL show_tables() RETURN name, type")) {
             if (t.type === "NODE" && t.name !== SOURCE) g.tables.add(t.name as string);
-            if (t.type === "REL" && t.name === "CHILD") {
-                for (const c of await g.query("CALL show_connection('CHILD') RETURN *"))
+            if (t.type === "REL" && t.name === "SON") {
+                for (const c of await g.query("CALL show_connection('SON') RETURN *"))
                     g.childPairs.add(`${c["source table name"]}\0${c["destination table name"]}`);
             }
         }
@@ -211,7 +211,7 @@ export class TaintGraph {
         for (const type of this.tables) nodes.set(type, (await this.query(`MATCH (n:\`${type}\`) RETURN ${cols}`)) as Row[]);
         for (const pair of this.childPairs) {
             const [from, to] = pair.split("\0");
-            const q = `MATCH (a:\`${from}\`)-[e:CHILD]->(b:\`${to}\`) RETURN a.id AS from, b.id AS to, e.key AS key, e.idx AS idx`;
+            const q = `MATCH (a:\`${from}\`)-[e:SON]->(b:\`${to}\`) RETURN a.id AS from, b.id AS to, e.key AS key, e.idx AS idx`;
             edges.set(pair, (await this.query(q)) as Edge[]);
         }
         const sources = await this.query(`MATCH (s:${SOURCE}) RETURN s.file AS file, s.code AS code`);
@@ -249,7 +249,7 @@ export class TaintGraph {
             await this.ensureChildPair(from, to);
             if (rows.length)
                 await this.batched(
-                    `COPY CHILD FROM (UNWIND $rows AS r RETURN r.from, r.to, r.key, r.idx) (from='${from}', to='${to}')`,
+                    `COPY SON FROM (UNWIND $rows AS r RETURN r.from, r.to, r.key, r.idx) (from='${from}', to='${to}')`,
                     rows
                 );
         }
@@ -273,8 +273,8 @@ export class TaintGraph {
         if (this.childPairs.has(pair)) return;
         await this.query(
             this.childPairs.size
-                ? `ALTER TABLE CHILD ADD FROM \`${from}\` TO \`${to}\``
-                : `CREATE REL TABLE CHILD(FROM \`${from}\` TO \`${to}\`, key STRING, idx INT64)`
+                ? `ALTER TABLE SON ADD FROM \`${from}\` TO \`${to}\``
+                : `CREATE REL TABLE SON(FROM \`${from}\` TO \`${to}\`, key STRING, idx INT64)`
         );
         this.childPairs.add(pair);
     }
