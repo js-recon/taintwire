@@ -1,5 +1,5 @@
 ---
-sidebar_position: 12
+sidebar_position: 13
 title: Roadmap and limitations
 ---
 
@@ -21,7 +21,7 @@ title: Roadmap and limitations
 
 What's still needed before taint queries work, in dependency order:
 
-1. **Property and heap flow.** `READS_PROPERTY`, `WRITES_PROPERTY` and `ALIASES`, covering member access, destructuring, for-of/for-in and object/array literals. All of these are [deferred](value-flow.md#deferred) for now.
+1. **Property and heap flow.** `READS_PROPERTY`, `WRITES_PROPERTY` and points-to over allocation sites, covering member access, destructuring, for-of/for-in and object/array literals. All of these are [deferred](value-flow.md#deferred) for now. See the [design](property-design.md).
 2. **Module recovery.** `IMPORTS`/`EXPORTS` across files, and bundler runtime semantics (webpack module factories, chunk registration), so calls through modules and bundle loaders resolve.
 3. **Control flow.** A CFG, `CONTROL_DEPENDS_ON` for implicit flows, and optionally reaching definitions or SSA to refine the flow-insensitive binding summaries.
 4. **Taint rules.** Source, sink and sanitizer patterns. Taint is then `FLOWS_TO|ARGUMENT_TO|RETURNS_TO` reachability from a source to a sink.
