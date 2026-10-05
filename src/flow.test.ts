@@ -234,14 +234,18 @@ test("8: update expressions read and write", async () => {
     }
 });
 
-test("9: a call reads callee and argument, with no call semantics", async () => {
+// Updated when the call graph landed: foo now resolves (CALLS), but the call's result still gets no flow from its
+// arguments, and foo has no params, so x gets no ARGUMENT_TO.
+test("9: a call reads callee and argument; arguments don't flow into the call result", async () => {
     expect(await edges("call", "READS")).toEqual([
         "CallExpression(foo(x)) -> foo:decl",
         "CallExpression(foo(x)) -> x:decl",
     ]);
     expect((await edges("call", "FLOWS_TO")).filter((e) => e.includes("CallExpression"))).toEqual([]);
     const tables = (await g.query("CALL show_tables() RETURN name")).map((r) => r.name);
-    for (const t of ["CALLS", "ARGUMENT_TO", "RETURNS_TO", "CHILD"]) expect(tables).not.toContain(t);
+    expect(tables).not.toContain("CHILD");
+    expect(await edges("call", "CALLS")).toEqual(["CallExpression(foo(x)) -> FunctionDeclaration(function foo() {})"]);
+    expect(await edges("call", "ARGUMENT_TO")).toEqual([]);
 });
 
 test("10: static member access reads the object only", async () => {
@@ -659,9 +663,6 @@ test("A20: global invariants over every case", async () => {
     // nothing from later milestones
     const tables = (await g.query("CALL show_tables() RETURN name")).map((r) => r.name);
     for (const t of [
-        "CALLS",
-        "ARGUMENT_TO",
-        "RETURNS_TO",
         "READS_PROPERTY",
         "WRITES_PROPERTY",
         "ALIASES",

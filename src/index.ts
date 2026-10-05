@@ -85,6 +85,9 @@ const RELS = {
     READS: ACCESS,
     WRITES: ACCESS,
     FLOWS_TO: [],
+    CALLS: ["candidates INT64"], // how many functions this callsite may call
+    ARGUMENT_TO: ["arg_index INT64", "callsite STRING"], // the argument's position, and its CallExpression's id (`index` and `call` are Cypher keywords)
+    RETURNS_TO: [],
 } as const;
 type Rel = keyof typeof RELS;
 // Ladybug rel tables need at least one FROM/TO pair. open() creates every rel table up front with one real pair
@@ -99,6 +102,9 @@ const DEFAULT_PAIRS: Record<Rel, [string, string]> = {
     READS: ["CallExpression", "Identifier"],
     WRITES: ["VariableDeclarator", "Identifier"],
     FLOWS_TO: ["Identifier", "Identifier"],
+    CALLS: ["CallExpression", "FunctionDeclaration"],
+    ARGUMENT_TO: ["Identifier", "Identifier"],
+    RETURNS_TO: ["ReturnStatement", "CallExpression"],
 };
 const relMaps = () => Object.fromEntries(Object.keys(RELS).map((r) => [r, new Map()])) as Record<Rel, Edges>;
 
@@ -108,7 +114,17 @@ export type ScopeKind = "global" | "module" | "function" | "block" | "catch" | "
 type ScopeRow = Record<keyof typeof SCOPE_COLUMNS, string | null>;
 
 type Row = Record<keyof typeof COLUMNS, string | number | null>;
-type Edge = { from: string; to: string; key?: string; idx?: number; access?: string; access_signature?: string | null };
+type Edge = {
+    from: string;
+    to: string;
+    key?: string;
+    idx?: number;
+    access?: string;
+    access_signature?: string | null;
+    candidates?: number;
+    arg_index?: number;
+    callsite?: string;
+};
 type Edges = Map<string, Edge[]>; // key: `${fromType}\0${toType}`
 type Ref = { type: string; slug_ref: string };
 
@@ -234,12 +250,14 @@ type Facts = {
     stores: [Node, Node][]; // value -> the binding of a target Identifier
     writes: [Node, Node][]; // operation -> target Identifier
     writeOnly: Set<Node>; // target Identifiers that aren't also read
+    defs: [Node, Node | null][]; // target Identifier -> the value it's given, or null when that isn't one expression
 };
 
 // Calls, member access, object/array literals, destructuring, iteration and await/yield add no flow yet (see docs/value-flow).
 function facts(node: Node, f: Facts) {
     const into = (...xs: (Node | null | undefined)[]) => xs.forEach((x) => x && f.flows.push([x, node]));
-    const write = (ts: Node[], only = false) => ts.forEach((t) => (f.writes.push([node, t]), only && f.writeOnly.add(t)));
+    const write = (ts: Node[], only = false, value: Node | null = null) =>
+        ts.forEach((t) => (f.writes.push([node, t]), f.defs.push([t, value]), only && f.writeOnly.add(t)));
     switch (node.type) {
         case "BinaryExpression":
         case "LogicalExpression":
@@ -262,12 +280,12 @@ function facts(node: Node, f: Facts) {
             return;
         case "AssignmentExpression": // the expression's value is the right side (combined with the old value if compound)
             into(node.right, node.operator === "=" ? null : (node.left as Node));
-            write(bindingIds(node.left as Node), node.operator === "=");
+            write(bindingIds(node.left as Node), node.operator === "=", node.operator === "=" && node.left.type === "Identifier" ? node.right : null);
             if (node.left.type === "Identifier") f.stores.push([node, node.left]);
             return;
         case "VariableDeclarator":
             if (!node.init) return;
-            write(bindingIds(node.id));
+            write(bindingIds(node.id), false, node.id.type === "Identifier" ? node.init : null);
             if (node.id.type === "Identifier") f.stores.push([node.init, node.id]);
             return;
         case "AssignmentPattern": // a default value
@@ -312,11 +330,15 @@ export function flatten(ast: Node, file: string) {
     const selfNames = new Set<Node>(); // named function expressions' own names
     const uses: [Node, Node, string | undefined][] = []; // [Identifier, the operation it's an operand of, its scope]
     const notRef = new Set<Node>(); // `export { a } from "x"`: `a` is the other module's name
-    const f: Facts = { flows: [], stores: [], writes: [], writeOnly: new Set() };
+    const f: Facts = { flows: [], stores: [], writes: [], writeOnly: new Set(), defs: [] };
+    const declarer = new Map<Node, Node>(); // DECLARES target -> its declarer
+    const calls: Node[] = [];
+    const returns = new Map<Node, Node[]>(); // function -> the ReturnStatements it owns (not its nested functions')
 
     // Iterative walk: minified bundles nest deep enough to blow the JS stack.
-    // Each entry carries its parent and the scopes it sits in: `scope` for lexical bindings, `varScope` for var.
-    type Ctx = { scope?: string; varScope?: string };
+    // Each entry carries its parent and the scopes it sits in: `scope` for lexical bindings, `varScope` for var,
+    // and `fn`, the function that owns any `return` in it.
+    type Ctx = { scope?: string; varScope?: string; fn?: Node };
     const stack: [Node, Node | undefined, Ctx][] = [[ast, undefined, {}]];
     while (stack.length) {
         const [node, parent, outer] = stack.pop()!;
@@ -332,7 +354,7 @@ export function flatten(ast: Node, file: string) {
                 push("PARENT_SCOPE", SCOPE, SCOPE, { from: s.id!, to: outer.scope });
                 parentScope.set(s.id!, outer.scope);
             }
-            inner = { scope: s.id!, varScope: VAR_SCOPES.has(kind) ? s.id! : outer.varScope };
+            inner = { scope: s.id!, varScope: VAR_SCOPES.has(kind) ? s.id! : outer.varScope, fn: isFunction(node) ? node : outer.fn };
         }
 
         const keys: readonly string[] = VISITOR_KEYS[node.type] ?? [];
@@ -356,10 +378,13 @@ export function flatten(ast: Node, file: string) {
         }
         if (node.type === "ExportNamedDeclaration" && node.source) for (const s of node.specifiers) if (s.type === "ExportSpecifier") notRef.add(s.local);
         facts(node, f);
+        if (node.type === "CallExpression" || node.type === "OptionalCallExpression") calls.push(node);
+        if (node.type === "ReturnStatement" && outer.fn) (returns.get(outer.fn) ?? returns.set(outer.fn, []).get(outer.fn)!).push(node);
         // Same idOf() as SON, so DECLARES targets are the existing Identifier nodes.
         // Every DECLARES target gets its IN_SCOPE from the same declared() call, so the two can't disagree.
         for (const t of declared(node)) {
             push("DECLARES", node.type, t.type, { from: id, to: idOf(t) });
+            declarer.set(t, node);
             let s: string | undefined;
             if (node.type === "VariableDeclarator") s = (parent as Node & { kind?: string }).kind === "var" ? outer.varScope : outer.scope;
             // A function/class declaration's own name binds outside it; a named expression's name, params and catch params bind inside.
@@ -425,6 +450,69 @@ export function flatten(ast: Node, file: string) {
     for (const [v, t] of f.stores) {
         const d = binding(t);
         if (d) edge("FLOWS_TO", v, d);
+    }
+
+    // A binding's definitions: each value written to it (null if unknown), and what its declarations bind. A function
+    // declaration or a named function expression binds that function; params, catch params, imports and classes bind
+    // values this pass can't see.
+    const defs = new Map<Node, (Node | null)[]>();
+    const def = (d: Node | undefined, v: Node | null) => d && (defs.get(d) ?? defs.set(d, []).get(d)!).push(v);
+    for (const [t, v] of f.defs) def(binding(t), v);
+    for (const [t, by] of declarer) {
+        if (by.type === "VariableDeclarator") continue; // an initializer is a write, above
+        if (selfNames.has(t) && binding(t) !== t) continue; // a shadowed function-expression name: no use reaches it
+        def(binding(t), isFunction(by) && t === (by as { id?: Node | null }).id ? by : null);
+    }
+    // The functions a value may be, or null if any part of it is unknown. Flow-insensitive like FLOWS_TO: every
+    // definition of a binding counts, in any order. ponytail: walks alias chains per callsite; memoise if they get long.
+    const union = (...cs: (Set<Node> | null)[]) => (cs.some((c) => !c) ? null : new Set(cs.flatMap((c) => [...c!])));
+    const callables = (v: Node | null | undefined, seen: Set<Node>): Set<Node> | null => {
+        switch (v?.type) {
+            case "FunctionDeclaration":
+            case "FunctionExpression":
+            case "ArrowFunctionExpression":
+                return new Set([v]);
+            case "Identifier": {
+                const d = refers.get(v);
+                if (!d) return null;
+                if (seen.has(d)) return new Set(); // a cycle adds no new values
+                seen.add(d);
+                return union(...(defs.get(d) ?? []).map((x) => callables(x, seen)));
+            }
+            case "SequenceExpression":
+                return callables(v.expressions.at(-1), seen);
+            case "AssignmentExpression":
+                return v.operator === "=" ? callables(v.right, seen) : null;
+            case "ConditionalExpression":
+                return union(callables(v.consequent, seen), callables(v.alternate, seen));
+            case "LogicalExpression":
+                return union(callables(v.left, seen), callables(v.right, seen));
+            default:
+                return v && TS_VALUES.has(v.type) ? callables((v as Node & { expression: Node }).expression, seen) : null;
+        }
+    };
+    // The binding a formal parameter declares, if it's a plain name (destructured params need element/property flow).
+    const paramName = (p: Node): Node | undefined =>
+        p.type === "Identifier" ? p : p.type === "AssignmentPattern" ? paramName(p.left) : p.type === "TSParameterProperty" ? paramName(p.parameter) : p.type === "RestElement" ? paramName(p.argument) : undefined;
+    for (const c of calls as (Node & { callee: Node; arguments: Node[] })[]) {
+        const targets = callables(c.callee, new Set());
+        if (!targets?.size) continue; // unresolved: a global, a param, a member, a call result, ...
+        for (const fn of targets as Set<Node & { params: Node[]; body: Node; async?: boolean; generator?: boolean }>) {
+            edge("CALLS", c, fn, { candidates: targets.size });
+            // Arguments by position; a rest param takes every argument from its position on. After a spread, positions are unknown.
+            const params = fn.params.filter((p) => !(p.type === "Identifier" && p.name === "this")); // TS `this` isn't a param
+            const rest = params.findIndex((p) => p.type === "RestElement");
+            for (const [i, a] of c.arguments.entries()) {
+                if (a.type === "SpreadElement" || a.type === "ArgumentPlaceholder") break;
+                const p = rest >= 0 && i >= rest ? params[rest] : params[i];
+                const d = p && paramName(p) && binding(paramName(p)!);
+                if (d) edge("ARGUMENT_TO", a, d, { arg_index: i, callsite: idOf(c) });
+            }
+            // An async function returns a promise and a generator an iterator, not the returned value.
+            if (fn.async || fn.generator) continue;
+            for (const r of returns.get(fn) ?? []) if ((r as Node & { argument?: Node | null }).argument) edge("RETURNS_TO", r, c);
+            if (fn.type === "ArrowFunctionExpression" && fn.body.type !== "BlockStatement") edge("RETURNS_TO", fn.body, c); // concise body
+        }
     }
     return { rootId: idOf(ast), nodes, scopes, rels };
 }

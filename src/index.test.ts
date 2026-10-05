@@ -138,7 +138,7 @@ test("cs-mast parse errors point at the babel parser, which recovers", async () 
 
 test("every edge table exists from open(), so an empty relation is zero rows, not a binder error", async () => {
     const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
-    const rels = ["SON", "DECLARES", "CREATES_SCOPE", "PARENT_SCOPE", "IN_SCOPE", "REFERS_TO", "READS", "WRITES", "FLOWS_TO"];
+    const rels = ["SON", "DECLARES", "CREATES_SCOPE", "PARENT_SCOPE", "IN_SCOPE", "REFERS_TO", "READS", "WRITES", "FLOWS_TO", "CALLS", "ARGUMENT_TO", "RETURNS_TO"];
     const counts = async (g: taintwire.TaintGraph) => {
         const out: Record<string, unknown> = {};
         for (const r of rels) out[r] = (await g.query(`MATCH ()-[e:${r}]->() RETURN count(e) AS n`))[0].n;
