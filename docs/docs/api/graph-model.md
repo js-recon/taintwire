@@ -202,9 +202,45 @@ Identifier y (decl) ─> Identifier y (use) ─┘
 
 - A variable's declaration `Identifier` is the summary for its value: every write flows into it, and it flows out to every read. This is flow-insensitive, so order isn't tracked and cycles are normal (`x = x + 1`).
 - Values flow through binary, logical, unary (not `void` or `delete`), conditional (branches only), template, sequence (last only), assignment and update expressions, and into `ReturnStatement`.
-- No flow through calls, member access, destructuring, iteration or object and array literals yet.
+- No flow through member access, destructuring, iteration, object and array literals, or unresolved calls yet. Resolved calls continue through `ARGUMENT_TO` and `RETURNS_TO`.
 
 See [Value flow](../implementation/value-flow.md).
+
+### `CALLS`
+
+`(call)-[:CALLS {candidates}]->(fn)` links a `CallExpression` or `OptionalCallExpression` to each function static analysis resolves it to: a `FunctionDeclaration`, `FunctionExpression` or `ArrowFunctionExpression` in the same file.
+
+| Property | Type | Contents |
+| --- | --- | --- |
+| `candidates` | `INT64` | How many functions this callsite may call. It's 1 unless the callee binding is assigned several known functions (`let f = a; f = b`). |
+
+- The callee goes through `REFERS_TO`, aliases (`const g = f`), `(0, f)`, `?:` and `||`, and IIFEs. It's never a name match.
+- A call is resolved only when every definition of the callee is a known function. Any parameter, import, member value, call result or other unknown leaves it unresolved, with no `CALLS` at all.
+- Member calls (`obj.m()`), globals (`eval`, `fetch`), `new` and tagged templates get none.
+
+### `ARGUMENT_TO`
+
+`(argument)-[:ARGUMENT_TO {arg_index, callsite}]->(param:Identifier)` means the argument at that position of a resolved call is the value of that parameter (its declaration `Identifier`).
+
+| Property | Type | Contents |
+| --- | --- | --- |
+| `arg_index` | `INT64` | The argument's position in the call. |
+| `callsite` | `STRING` | The `id` of the `CallExpression`. |
+
+Defaults, rest params (every argument from that position on), missing and extra arguments, spreads (nothing at or after them) and destructured params (none) are covered in [Calls](../implementation/calls.md#argument_to).
+
+### `RETURNS_TO`
+
+`(return)-[:RETURNS_TO]->(call)` links each `ReturnStatement` with a value, or a concise arrow body, to every call that `CALLS` its function. A `return` inside a nested function belongs to that function. Async functions and generators get none, because their call is a promise or an iterator. No properties.
+
+```text
+function identity(x) { return x; }
+const y = identity(source);
+
+source ─ARGUMENT_TO─> x (param) ─FLOWS_TO─> x ─FLOWS_TO─> return x; ─RETURNS_TO─> identity(source) ─FLOWS_TO─> y (decl)
+```
+
+See [Calls, arguments and returns](../implementation/calls.md).
 
 ## `props`
 

@@ -154,13 +154,15 @@ function flatten(ast: Node, file: string): {
     nodes: Map<string, Row[]>;
     scopes: ScopeRow[];
     rels: Record<
-        "SON" | "DECLARES" | "CREATES_SCOPE" | "PARENT_SCOPE" | "IN_SCOPE" | "REFERS_TO" | "READS" | "WRITES" | "FLOWS_TO",
+        | "SON" | "DECLARES" | "CREATES_SCOPE" | "PARENT_SCOPE" | "IN_SCOPE"
+        | "REFERS_TO" | "READS" | "WRITES" | "FLOWS_TO"
+        | "CALLS" | "ARGUMENT_TO" | "RETURNS_TO",
         Map<string, Edge[]>
     >;
 };
 ```
 
-Turns a Babel AST into the rows `add()` loads, with no database involved: node rows grouped by node type, `Scope` rows, and edges grouped by `"<fromType>\0<toType>"`. Scope edges use `"Scope"` as the type on their scope end. `REFERS_TO`, `READS`, `WRITES` and `FLOWS_TO` are resolved within this one file, after the walk. Exported for testing and research, and likely to change.
+Turns a Babel AST into the rows `add()` loads, with no database involved: node rows grouped by node type, `Scope` rows, and edges grouped by `"<fromType>\0<toType>"`. Scope edges use `"Scope"` as the type on their scope end. `REFERS_TO`, `READS`, `WRITES`, `FLOWS_TO`, `CALLS`, `ARGUMENT_TO` and `RETURNS_TO` are resolved within this one file, after the walk. Exported for testing and research, and likely to change.
 
 ## `declared()`
 

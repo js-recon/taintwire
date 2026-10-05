@@ -7,7 +7,7 @@ title: Value flow
 
 `A -[:FLOWS_TO]-> B` means the value represented by `A` may contribute to the value represented by `B`. It's data flow, and the graph later taint queries traverse. It isn't name resolution ([`REFERS_TO`](references.md)), access classification ([`READS`/`WRITES`](references.md#reads-and-writes)), AST containment (`SON`) or a call edge. `FLOWS_TO` has no properties.
 
-This first version is intra-procedural and deliberately small. It covers values moving through expressions, into variables and back out of them, within the code of each file. Calls, properties and control flow come later.
+This version is deliberately small. It covers values moving through expressions, into variables and back out of them, within the code of each file. [`ARGUMENT_TO` and `RETURNS_TO`](calls.md) extend it across statically resolved calls. Properties and control flow come later.
 
 ```text
 const input = source;
@@ -73,16 +73,15 @@ None of these create `FLOWS_TO` yet. They're `READS`/`WRITES` only, or nothing.
 
 | Deferred | Example | Why | Later |
 | --- | --- | --- | --- |
-| Calls | `foo(x)` | The result needn't depend on any argument. `foo` and `x` are read. | `CALLS`, `ARGUMENT_TO`, `RETURNS_TO` |
-| Return to caller | `return x` | The edge stops at the `ReturnStatement`. | `RETURNS_TO` |
-| Concise arrow bodies | `() => x` | There's no `ReturnStatement` to end at. `x` is read by the `ArrowFunctionExpression`. | `RETURNS_TO` |
+| Arguments into the call's value | `foo(x)` | The result needn't depend on any argument. `foo` and `x` are read. For a resolved call, `x` goes `ARGUMENT_TO` the param and the result comes back through `RETURNS_TO`. | [done](calls.md) for resolved calls |
+| Unresolved calls | `eval(x)`, `obj.m(x)` | Opaque: no flow through them. | property pass, host models |
 | Member reads | `obj.foo` | The property's value isn't the object. No `obj → obj.foo`. The `MemberExpression` itself still flows on, for example into `const y = obj.foo`. | `READS_PROPERTY` |
 | Property writes | `obj.foo = v` | The heap isn't modelled. `v` flows into the assignment but stops there. | `WRITES_PROPERTY`, `ALIASES` |
 | Destructuring | `const { a } = o`, `[a] = arr` | It's a property or element read, like `obj.foo`. `a` is written, but nothing flows into it. | property pass |
 | for-of / for-in | `for (x of xs)` | Elements and keys are element reads. `x` is written, with no flow. | property pass |
 | Object and array literals | `[x]`, `{ k: x }` | Aggregate contents need heap modelling. | property pass |
 | `await`, `yield`, Promises, callbacks | `await p` | Promise and callback semantics. | later |
-| Function values | `function f() {}` | The function isn't a value flowing into `f` yet. | call graph |
+| Function values | `function f() {}` | The function isn't a `FLOWS_TO` value flowing into `f`. The call graph reads declarations directly. | |
 | Implicit flow | `if (secret) y = 1` | Control dependence. | `CONTROL_DEPENDS_ON` |
 
 ## Coverage
@@ -91,7 +90,7 @@ None of these create `FLOWS_TO` yet. They're `READS`/`WRITES` only, or nothing.
 
 - `const y = x`, `x = y`, and `x = x + 1` with its cycle
 - compound and logical assignment, and update expressions
-- calls (no flow into the call, no `CALLS`, `ARGUMENT_TO` or `RETURNS_TO` table)
+- calls (no flow from arguments into the call)
 - the conditional without its test, the template literal, and the sequence's last expression only
 - nested assignment, and return
 - unresolved globals

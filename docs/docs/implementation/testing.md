@@ -1,5 +1,5 @@
 ---
-sidebar_position: 10
+sidebar_position: 11
 title: Testing
 ---
 
@@ -65,6 +65,10 @@ The `A1`-`A20` tests are an acceptance suite for the semantic layer. Each relati
 - global invariants: the `SON` tree intact, one `IN_SCOPE` per `DECLARES`, and no tables from later milestones
 
 The spec cases already cover the rest, and the file says which test covers which item. See [References: Coverage](references.md#coverage) and [Value flow: Coverage](value-flow.md#coverage).
+
+### `src/calls.test.ts`: `CALLS`, `ARGUMENT_TO`, `RETURNS_TO`
+
+One snippet per call-resolution rule, both resolved and deliberately unresolved, then argument mapping, return ownership, interprocedural reachability (including recursion), the two end-to-end demos, determinism, `babel` parity, persistence and consistency invariants. It uses the shared `edgeList()` and `reaches()` helpers from `src/test-utils.ts`, which the build excludes. See [Calls: Coverage](calls.md#coverage).
 
 ## CI
 

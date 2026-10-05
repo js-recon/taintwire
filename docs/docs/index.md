@@ -31,8 +31,9 @@ taintwire is pre-1.0 and not yet on npm. The API and graph schema will change be
 - name resolution (`REFERS_TO`)
 - access classification (`READS`, `WRITES`)
 - intra-procedural value flow (`FLOWS_TO`)
+- a static call graph with argument and return flow (`CALLS`, `ARGUMENT_TO`, `RETURNS_TO`)
 
-The call graph, interprocedural and property flow, and taint rules aren't in yet. See the [roadmap](implementation/roadmap.md).
+Property and heap flow, module recovery, control flow and taint rules aren't in yet. See the [roadmap](implementation/roadmap.md).
 
 :::
 

@@ -146,8 +146,8 @@ RETURN op.type, u.line, u.col
 | `with` and sloppy direct `eval` | `with (o) { x }` | They change scopes at runtime. `x` resolves statically, which may be wrong. |
 | JSX element names | `<Foo />` | `JSXIdentifier` isn't `Identifier`, so the component isn't resolved yet. `{expr}` containers are resolved. |
 | TS enum initializers | `enum E { A = x }` | Anything under a `TS*` node is treated as type-level. |
-| Function and class declarations as writes | `function f() {}` | Only `DECLARES`. Binding a function value belongs with the call graph. |
-| Parameter initialization by calls | `f(1)` writing `p` | Interprocedural: `ARGUMENT_TO`. |
+| Function and class declarations as writes | `function f() {}` | Only `DECLARES`. The [call graph](calls.md#a-bindings-definitions) treats the declaration as the binding's function. |
+| Parameter initialization by calls | `f(1)` writing `p` | Not a `WRITES`. Resolved calls get an [`ARGUMENT_TO`](calls.md#argument_to) edge instead. |
 | Order | a read before a write | Every read and write is to the same summary binding. See [Value flow](value-flow.md#flow-insensitive-bindings). |
 
 ## Coverage

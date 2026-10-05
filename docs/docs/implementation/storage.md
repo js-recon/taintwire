@@ -1,5 +1,5 @@
 ---
-sidebar_position: 9
+sidebar_position: 10
 title: Storage
 ---
 
@@ -23,6 +23,9 @@ taintwire stores graphs in [LadybugDB](https://ladybugdb.com/) 0.21.2 through `@
 | `READS(access STRING, access_signature STRING)` | edge, many FROM/TO pairs (operation type `-> Identifier`) | Same as `SON` |
 | `WRITES(access STRING, access_signature STRING)` | edge, many FROM/TO pairs | Same as `SON` |
 | `FLOWS_TO()` | edge, many FROM/TO pairs (any expression type to any other) | Same as `SON` |
+| `CALLS(candidates INT64)` | edge, call type `->` function type | Same as `SON` |
+| `ARGUMENT_TO(arg_index INT64, callsite STRING)` | edge, argument type `-> Identifier` | Same as `SON` |
+| `RETURNS_TO()` | edge, `ReturnStatement` (or a concise arrow body's type) `->` call type | Same as `SON` |
 
 ### Every edge table exists from the start
 
@@ -52,6 +55,7 @@ pairs.size
 
 - **`end` is a Cypher keyword**, so Babel's `start`/`end` are stored as `startOffset`/`endOffset`.
 - **Table names are backtick-quoted** in generated DDL and queries, in case a Babel type clashes with a keyword.
+- **Edge property names avoid Cypher keywords**: `ARGUMENT_TO` uses `arg_index` and `callsite` because `index` and `call` don't parse as column names.
 - **`Source` and `Scope` can't collide** with an AST table, because neither is a Babel type name.
 
 ## Bulk loading

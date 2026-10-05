@@ -155,7 +155,50 @@ RETURN properties(nodes(p), 'type') AS path, properties(nodes(p), 'line') AS lin
 // path: [MemberExpression, Identifier h (decl), Identifier h, BinaryExpression, Identifier u (decl), Identifier u]
 ```
 
-`FLOWS_TO` stops at calls and property reads for now. `fetch(location.hash.slice(1))` has no path, because the `.slice(1)` call is opaque. See [Value flow: Deferred](../implementation/value-flow.md#deferred).
+`FLOWS_TO` stops at unresolved calls and property reads. `fetch(location.hash.slice(1))` has no path, because the `.slice(1)` call is opaque. See [Value flow: Deferred](../implementation/value-flow.md#deferred).
+
+### Across functions
+
+Add `ARGUMENT_TO` and `RETURNS_TO` to follow values through statically resolved calls:
+
+```cypher
+MATCH (src:MemberExpression)-[:SON {key: 'object'}]->(:Identifier {name: 'location'}),
+      (src)-[:SON {key: 'property'}]->(:Identifier {name: 'search'}),
+      p = (src)-[:FLOWS_TO|ARGUMENT_TO|RETURNS_TO* SHORTEST 1..30]->(arg),
+      (sink:CallExpression)-[:SON {key: 'arguments'}]->(arg),
+      (sink)-[:SON {key: 'callee'}]->(:Identifier {name: 'eval'})
+RETURN properties(nodes(p), 'type') AS types, properties(rels(p), '_label') AS rels
+```
+
+On
+
+```js
+function pass(x) { return x; }
+const data = pass(location.search);
+eval(data);
+```
+
+this returns `rels: [ARGUMENT_TO, FLOWS_TO, FLOWS_TO, RETURNS_TO, FLOWS_TO, FLOWS_TO]`. The path goes from the source, to the parameter `x`, its use, `return x`, the call `pass(...)`, `data`, and finally `eval`'s argument. `properties(rels(p), '_label')` lists edge types. `list_transform(rels(p), r -> label(r))` does the same.
+
+The source and the sink are matched structurally. `location` and `eval` are globals with no declarations.
+
+### Which function a call reaches
+
+```cypher
+MATCH (c:CallExpression)-[e:CALLS]->(fn)
+WHERE c.id = $call
+RETURN fn.type AS type, fn.line AS line, e.candidates AS candidates
+```
+
+No rows means the call is unresolved: a global, a member call, or a callee with an unknown definition.
+
+### Calls that stayed unresolved
+
+```cypher
+MATCH (c:CallExpression)
+WHERE NOT EXISTS { MATCH (c)-[:CALLS]->() }
+RETURN c.file AS file, count(*) AS unresolved
+```
 
 ### The function enclosing a node
 

@@ -1,5 +1,5 @@
 ---
-sidebar_position: 11
+sidebar_position: 12
 title: Roadmap and limitations
 ---
 
@@ -15,15 +15,16 @@ title: Roadmap and limitations
 - Scopes: `Scope` nodes with `CREATES_SCOPE`, `PARENT_SCOPE` and `IN_SCOPE`, so every declared binding is attached to the lexical scope it lives in. See [Scopes](scopes.md).
 - `REFERS_TO`, `READS` and `WRITES`: each use of a name resolved to its declaration, and each access classified with its exact occurrence. See [References, reads and writes](references.md).
 - `FLOWS_TO`: a conservative, flow-insensitive, intra-procedural value-flow graph through expressions and variables. See [Value flow](value-flow.md).
+- `CALLS`, `ARGUMENT_TO` and `RETURNS_TO`: statically resolved calls, with argument-to-parameter and return-to-callsite flow, so value paths cross functions. See [Calls, arguments and returns](calls.md).
 
 ## Planned
 
 What's still needed before taint queries work, in dependency order:
 
-1. **Calls and interprocedural flow.** `CALLS` from each call site to the function it calls, where that can be resolved. `ARGUMENT_TO` from arguments to parameters, and `RETURNS_TO` from `ReturnStatement`s (and concise arrow bodies) to call sites. These extend `FLOWS_TO` across functions.
-2. **Property and heap flow.** `READS_PROPERTY`, `WRITES_PROPERTY` and `ALIASES`, covering member access, destructuring, for-of/for-in and object/array literals. All of these are [deferred](value-flow.md#deferred) for now.
+1. **Property and heap flow.** `READS_PROPERTY`, `WRITES_PROPERTY` and `ALIASES`, covering member access, destructuring, for-of/for-in and object/array literals. All of these are [deferred](value-flow.md#deferred) for now.
+2. **Module recovery.** `IMPORTS`/`EXPORTS` across files, and bundler runtime semantics (webpack module factories, chunk registration), so calls through modules and bundle loaders resolve.
 3. **Control flow.** A CFG, `CONTROL_DEPENDS_ON` for implicit flows, and optionally reaching definitions or SSA to refine the flow-insensitive binding summaries.
-4. **Taint rules.** Source, sink and sanitizer patterns. Taint is then `FLOWS_TO` reachability from a source to a sink.
+4. **Taint rules.** Source, sink and sanitizer patterns. Taint is then `FLOWS_TO|ARGUMENT_TO|RETURNS_TO` reachability from a source to a sink.
 5. **Integration into JS Recon**, replacing its current taint engine.
 
 Each new edge type is a `RELS` entry plus the emitting code in `flatten()` (or a later pass). `open()`, `save()` and `load()` pick it up from `RELS`. See [Architecture](architecture.md#design-choices).
@@ -44,3 +45,5 @@ Each new edge type is a `RELS` entry plus the emitting code in `flatten()` (or a
 | LadybugDB inline-filter bug | `(n {p: v})` followed by an `OPTIONAL MATCH` that finds nothing returns `n`'s properties as `null` | Filter with `WHERE` ([Query cookbook](../api/queries.md#inline-property-maps-before-optional-match)) |
 | Flow-insensitive bindings | Every write of a variable reaches every read of it, whatever the order, and `FLOWS_TO` has cycles | Reaching definitions or SSA ([Value flow](value-flow.md#flow-insensitive-bindings)) |
 | Per-file resolution | Globals shared between script files, and host objects, stay unresolved | Model the global object and host APIs |
+| Context-insensitive calls | Every callsite of a function shares its param and return summaries, so `id(s1)` and `id(s2)` mix | Call strings or cloning ([Calls](calls.md#context-insensitivity)) |
+| All-or-nothing call resolution | One unknown definition (a param, an import, a member value) leaves a call unresolved | Property and module recovery, then higher-order flow |
