@@ -1,5 +1,5 @@
 ---
-sidebar_position: 6
+sidebar_position: 7
 title: Storage
 ---
 
@@ -14,7 +14,11 @@ taintwire stores graphs in [LadybugDB](https://ladybugdb.com/) 0.21.2 through `@
 | `Source(file STRING PRIMARY KEY, code STRING)` | node | By `open()`, `IF NOT EXISTS` |
 | One table per Babel node type, all with the `COLUMNS` set | node | By `ensureNodeTable()`, the first time the type is loaded |
 | `SON(key STRING, idx INT64)` | edge, many FROM/TO pairs | By `ensureRelPair()`, the first time a (parent type, child type) pair is loaded |
+| `Scope(id STRING PRIMARY KEY, kind, file, signature, owner_signature)` | node | By `open()`, `IF NOT EXISTS` |
 | `DECLARES()` | edge, many FROM/TO pairs | Same as `SON` |
+| `CREATES_SCOPE()` | edge, one pair per owner type (`FunctionDeclaration -> Scope`, ...) | Same as `SON` |
+| `PARENT_SCOPE()` | edge, `Scope -> Scope` | Same as `SON` |
+| `IN_SCOPE()` | edge, `Identifier -> Scope` | Same as `SON` |
 
 ### Why a table per node type
 
@@ -38,7 +42,7 @@ pairs.size
 
 - **`end` is a Cypher keyword**, so Babel's `start`/`end` are stored as `startOffset`/`endOffset`.
 - **Table names are backtick-quoted** in generated DDL and queries, in case a Babel type clashes with a keyword.
-- **`Source` can't collide** with an AST table, because it isn't a Babel type name.
+- **`Source` and `Scope` can't collide** with an AST table, because neither is a Babel type name.
 
 ## Bulk loading
 
@@ -53,7 +57,7 @@ The design notes sketched `MERGE` per node and per edge. An intermediate version
 
 `batched()` prepares each `COPY` once and runs it over 5,000-row slices (`BATCH_SIZE`), which keeps parameter lists small on large bundles.
 
-Node tables load before edge tables, because `COPY` into an edge table needs both endpoints to exist already.
+Node tables, then the `Scope` rows, load before edge tables, because `COPY` into an edge table needs both endpoints to exist already.
 
 ## Opening a database
 
@@ -71,7 +75,7 @@ Ladybug reserves virtual address space for the maximum database size, 8 TiB by d
 `open()` rebuilds its caches from the database itself:
 
 ```cypher
-CALL show_tables() RETURN name, type          // node tables -> tables set (minus Source)
+CALL show_tables() RETURN name, type          // node tables -> tables set (minus Source and Scope)
 CALL show_connection('SON') RETURN *          // FROM/TO pairs -> relPairs
 ```
 
@@ -93,7 +97,7 @@ The source cache is unbounded. That's fine at current scale, and it's marked `po
 Ladybug's `EXPORT DATABASE` rejects edge tables with several FROM/TO pairs, which every taintwire graph has. So `save()` copies the graph itself:
 
 1. Refuse if `dbPath` exists.
-2. Read every node table (`MATCH (n:T) RETURN <COLUMNS>`) and every edge pair (`MATCH (a:F)-[e:R]->(b:T) RETURN a.id, b.id, <props>`) into the same shapes `flatten()` produces.
+2. Read every node table (`MATCH (n:T) RETURN <COLUMNS>`), every `Scope` row and every edge pair (`MATCH (a:F)-[e:R]->(b:T) RETURN a.id, b.id, <props>`) into the same shapes `flatten()` produces.
 3. Read every `Source` row.
 4. Open a new graph at `dbPath`, insert the `Source` rows, and run the same `load()` as `add()`.
 

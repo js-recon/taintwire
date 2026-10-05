@@ -5,17 +5,19 @@ title: Flattening
 
 # Flattening
 
-`flatten(ast, file)` turns a Babel tree into rows: one per node, grouped by node type, and one per edge, grouped by the pair of endpoint types. It doesn't touch the database.
+`flatten(ast, file)` turns a Babel tree into rows: one per node, grouped by node type, one per scope, and one per edge, grouped by the pair of endpoint types. It doesn't touch the database.
 
 ## The walk
 
 ```ts
-const stack: Node[] = [ast];
+const stack: [Node, Node | undefined, Ctx][] = [[ast, undefined, {}]];
 while (stack.length) {
-    const node = stack.pop()!;
+    const [node, parent, outer] = stack.pop()!;
     // ...
 }
 ```
+
+Each entry carries the node's parent and its scope context (`{ scope, varScope }`). [Scopes](scopes.md#building-the-tree) explains how that context replaces a push/pop scope stack.
 
 The walk uses an explicit stack, not recursion, because minified bundles nest deeply enough to overflow the JS call stack. Children are found through Babel's `VISITOR_KEYS[node.type]`, the same table Babel's own traversal uses. Node types missing from `VISITOR_KEYS` are treated as leaves.
 
@@ -66,8 +68,9 @@ Besides `id`, `type` and `file`:
 ## Grouping
 
 ```ts
-nodes: Map<string, Row[]>;                              // node type -> rows
-rels: { SON: Map<string, Edge[]>; DECLARES: Map<...> }; // "FromType\0ToType" -> edges
+nodes: Map<string, Row[]>;                // node type -> rows
+scopes: ScopeRow[];                       // all go in the one Scope table
+rels: Record<Rel, Map<string, Edge[]>>;   // "FromType\0ToType" -> edges, per edge table in RELS
 ```
 
 The grouping follows how [storage](storage.md) works. Each node type is its own table, and LadybugDB's `COPY` into an edge table with several FROM/TO pairs has to name one `(from, to)` pair per statement. Grouping up front gives `load()` one `COPY` per group. `\0` separates the pair because it can't appear in a type name.

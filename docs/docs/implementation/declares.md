@@ -48,7 +48,7 @@ This recursively collects the identifiers a binding pattern binds:
 - **Method keys aren't bindings.** `{ method(a) {} }` binds `a` but not `method`. The key is a property name. A test checks that no `SON {key: 'key'}` target is ever a `DECLARES` target.
 - **Wrappers declare nothing.** `ExportNamedDeclaration`, `ExportDefaultDeclaration` and `VariableDeclaration` only wrap the real declarer. `export { x }` and re-exports (`export { y } from`, `export *`) refer to bindings rather than creating them.
 - **Assignments aren't declarations.** `({ a } = o)` writes to an existing binding. That will be a reference edge, not `DECLARES`.
-- **No scopes yet.** A `FunctionDeclaration` declares its own name, even though the name binds in the enclosing scope while the params bind inside the function. Scope edges are needed to tell those apart. Until they exist, `DECLARES` answers "who introduces this name", not "which binding does this use refer to".
+- **Scope is a separate edge.** A `FunctionDeclaration` declares its own name and its params, even though the name binds in the enclosing scope and the params bind inside the function. `DECLARES` only answers "who introduces this name". `IN_SCOPE` answers "where does it live", and it's emitted from the same `declared()` call. See [Scopes](scopes.md).
 
 ## Coverage
 

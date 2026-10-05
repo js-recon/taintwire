@@ -53,6 +53,47 @@ RETURN d.type AS declaredBy, i.file AS file, i.line AS line
 
 This finds every binding with that name, in any scope. It's a name match, not resolution of one particular reference.
 
+### The scope a binding lives in
+
+```cypher
+MATCH (d)-[:DECLARES]->(i:Identifier {name: $name})-[:IN_SCOPE]->(s:Scope)<-[:CREATES_SCOPE]-(o)
+RETURN i.line AS line, d.type AS declaredBy, s.kind AS scope, o.type AS owner, o.line AS ownerLine
+```
+
+### Every binding in a function
+
+```cypher
+MATCH (f:FunctionDeclaration)-[:SON {key: 'id'}]->(:Identifier {name: $fn}),
+      (f)-[:CREATES_SCOPE]->(s:Scope)<-[:IN_SCOPE]-(i:Identifier)
+RETURN i.name AS name, i.line AS line
+```
+
+This returns the params and the top-level `var`, `let` and `const` of the function body. Bindings in nested blocks live in child scopes. To include them, walk down `PARENT_SCOPE`:
+
+```cypher
+MATCH (f:FunctionDeclaration)-[:SON {key: 'id'}]->(:Identifier {name: $fn}),
+      (f)-[:CREATES_SCOPE]->(:Scope)<-[:PARENT_SCOPE*0..30]-(:Scope)<-[:IN_SCOPE]-(i:Identifier)
+RETURN i.name AS name, i.line AS line
+```
+
+### A scope's chain up to the root
+
+```cypher
+MATCH (i:Identifier {id: $id})-[:IN_SCOPE]->(s:Scope),
+      p = (s)-[:PARENT_SCOPE*0..30]->(a:Scope), (o)-[:CREATES_SCOPE]->(a)
+RETURN a.kind AS kind, o.type AS owner, o.line AS line
+ORDER BY length(p)
+```
+
+The first row is the binding's own scope, and the last is the file's `global` or `module` scope.
+
+### Bindings in a file's top-level scope
+
+```cypher
+MATCH (:Program {file: $file})-[:CREATES_SCOPE]->(s:Scope)<-[:IN_SCOPE]-(i:Identifier)
+RETURN i.name AS name, s.kind AS kind
+```
+
 ### The function enclosing a node
 
 ```cypher
@@ -111,9 +152,22 @@ await graph.query("CALL var_length_extend_max_depth=200");
 await graph.query("MATCH (f:FunctionDeclaration)-[:SON*1..200]->(c:CallExpression) RETURN count(c)");
 ```
 
-### `MATCH (n)` includes `Source`
+### `MATCH (n)` includes `Source` and `Scope`
 
-Unlabelled matches also hit the `Source` table, which holds the stored file text. Add `WHERE n.type IS NOT NULL` to match AST nodes only.
+Unlabelled matches also hit the `Source` table, which holds the stored file text, and the `Scope` table. Add `WHERE n.type IS NOT NULL` to match AST nodes only.
+
+### Inline property maps before `OPTIONAL MATCH`
+
+LadybugDB 0.21.2 returns wrong results when a node is filtered with an inline property map and then extended with an `OPTIONAL MATCH` that finds nothing. The node's own properties come back as `null`:
+
+```cypher
+// Wrong: the root scope (no parent) comes back with s.id = null
+MATCH (s:Scope {file: 'app.js'}) OPTIONAL MATCH (s)-[:PARENT_SCOPE]->(p) RETURN s.id, p.id
+// Right
+MATCH (s:Scope) WHERE s.file = 'app.js' OPTIONAL MATCH (s)-[:PARENT_SCOPE]->(p) RETURN s.id, p.id
+```
+
+Filter with `WHERE` whenever an `OPTIONAL MATCH` follows.
 
 ### `value` is always a string
 

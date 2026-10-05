@@ -14,8 +14,10 @@ Everything below is exported from `@js-recon/taintwire`. TypeScript declarations
 | [`Parser`](#parser) | type | `"cs-mast" \| "babel"` |
 | [`PARSER_OPTIONS`](#parser_options) | const | The `@babel/parser` options |
 | [`CS_MAST_CONFIG`](#cs_mast_config) | const | The cs-mast config used to hash every node |
-| [`flatten()`](#flatten) | function | Low level: AST to node rows and edges, without a database |
+| [`flatten()`](#flatten) | function | Low level: AST to node rows, scope rows and edges, without a database |
 | [`declared()`](#declared) | function | Low level: the identifiers a single AST node declares |
+| [`scopeKind()`](#scopekind) | function | Low level: the kind of scope a single AST node creates |
+| [`ScopeKind`](#scopekind) | type | `"global" \| "module" \| "function" \| "block" \| "catch" \| "class" \| "static_block"` |
 
 ## `import()`
 
@@ -149,11 +151,12 @@ The cs-mast config behind the `hash` column. To rebuild a node's full CS-MAST-S 
 function flatten(ast: Node, file: string): {
     rootId: string;
     nodes: Map<string, Row[]>;
-    rels: { SON: Map<string, Edge[]>; DECLARES: Map<string, Edge[]> };
+    scopes: ScopeRow[];
+    rels: Record<"SON" | "DECLARES" | "CREATES_SCOPE" | "PARENT_SCOPE" | "IN_SCOPE", Map<string, Edge[]>>;
 };
 ```
 
-Turns a Babel AST into the rows `add()` loads, with no database involved: node rows grouped by node type, and edges grouped by `"<fromType>\0<toType>"`. Exported for testing and research, and likely to change.
+Turns a Babel AST into the rows `add()` loads, with no database involved: node rows grouped by node type, `Scope` rows, and edges grouped by `"<fromType>\0<toType>"`. Scope edges use `"Scope"` as the type on their scope end. Exported for testing and research, and likely to change.
 
 ## `declared()`
 
@@ -162,6 +165,15 @@ function declared(node: Node): Node[];
 ```
 
 Returns the `Identifier` nodes that `node` introduces as bindings, which become its outgoing `DECLARES` edges. Returns `[]` for node types that declare nothing. See [Graph model](graph-model.md#declares) for the rules.
+
+## `scopeKind()`
+
+```ts
+type ScopeKind = "global" | "module" | "function" | "block" | "catch" | "class" | "static_block";
+function scopeKind(node: Node, parent?: Node): ScopeKind | null;
+```
+
+Returns the kind of `Scope` that `node` creates, or `null` if it creates none. `parent` is the node's AST parent. It's needed for `BlockStatement`, which creates no scope when it's a function or catch body. See [Graph model](graph-model.md#the-scope-table) for the table of owners.
 
 ## Errors
 

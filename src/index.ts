@@ -2,9 +2,9 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { parse, type ParserOptions } from "@babel/parser";
-import { VISITOR_KEYS, type Node } from "@babel/types";
+import { isFunction, VISITOR_KEYS, type Node } from "@babel/types";
 import lbug from "@ladybugdb/core";
-import { cs_mast_init, CS_MAST_SIGNATURE_KEY, ParseError, type CsMastConfig } from "@shriyanss/cs-mast";
+import { cs_mast_init, CS_MAST_SIGNATURE_KEY, ParseError, sha256, type CsMastConfig } from "@shriyanss/cs-mast";
 
 // Same options as js-recon, so both see the same AST for the same input.
 export const PARSER_OPTIONS: ParserOptions = {
@@ -47,8 +47,9 @@ const BATCH_SIZE = 5000;
 // Ladybug's default (8 TiB) mmap reservation is only released on GC, not close(), so a process ran out of
 // address space after ~9 opens. 1 TiB is far beyond any AST graph.
 const MAX_DB_SIZE = 2 ** 40;
-// Not a Babel node type, so it can't collide with an AST table.
+// Not Babel node types, so they can't collide with an AST table.
 const SOURCE = "Source";
+const SCOPE = "Scope";
 
 // Columns shared by every AST node table. `end` is a Cypher keyword, hence *Offset.
 const COLUMNS = {
@@ -71,9 +72,15 @@ const COLUMNS = {
 // Node fields that are either columns already or noise for the graph.
 const SKIP_PROPS = new Set(["type", "start", "end", "loc", "range", "leadingComments", "trailingComments", "innerComments", "comments", "errors", "tokens", CS_MAST_SIGNATURE_KEY]);
 
-// Rel tables and their property columns. SON is AST containment; DECLARES is the first semantic edge.
-const RELS = { SON: ["key STRING", "idx INT64"], DECLARES: [] } as const;
+// Rel tables and their property columns. SON is AST containment; the rest are semantic overlays.
+const RELS = { SON: ["key STRING", "idx INT64"], DECLARES: [], CREATES_SCOPE: [], PARENT_SCOPE: [], IN_SCOPE: [] } as const;
 type Rel = keyof typeof RELS;
+const relMaps = () => Object.fromEntries(Object.keys(RELS).map((r) => [r, new Map()])) as Record<Rel, Edges>;
+
+// Scope nodes: semantic, not AST, so they get their own table. Ids are deterministic (see scopeRow()).
+const SCOPE_COLUMNS = { id: "STRING PRIMARY KEY", kind: "STRING", file: "STRING", signature: "STRING", owner_signature: "STRING" } as const;
+export type ScopeKind = "global" | "module" | "function" | "block" | "catch" | "class" | "static_block";
+type ScopeRow = Record<keyof typeof SCOPE_COLUMNS, string | null>;
 
 type Row = Record<keyof typeof COLUMNS, string | number | null>;
 type Edge = { from: string; to: string; key?: string; idx?: number };
@@ -134,7 +141,58 @@ export function declared(node: Node): Node[] {
     }
 }
 
-/** Flatten a Babel AST into per-type node rows and per-(parent,child)-type SON edges. */
+const isLexical = (d: Node | null | undefined) => d?.type === "VariableDeclaration" && d.kind !== "var";
+
+/** The kind of scope `node` creates, or null. `parent` tells a function/catch body apart from a nested block. */
+export function scopeKind(node: Node, parent?: Node): ScopeKind | null {
+    if (isFunction(node)) return "function";
+    switch (node.type) {
+        case "Program":
+            return node.sourceType === "module" ? "module" : "global";
+        case "ClassDeclaration":
+        case "ClassExpression":
+            return "class";
+        case "StaticBlock":
+            return "static_block";
+        case "CatchClause":
+            return "catch";
+        case "SwitchStatement": // one scope shared by every case
+            return "block";
+        case "BlockStatement": // a function or catch body is part of that scope
+            return parent && (isFunction(parent) || parent.type === "CatchClause") ? null : "block";
+        case "ForStatement":
+            return isLexical(node.init) ? "block" : null;
+        case "ForInStatement":
+        case "ForOfStatement":
+            return isLexical(node.left) ? "block" : null;
+        default:
+            return null;
+    }
+}
+// Scopes `var` binds in; the rest only hold lexical bindings.
+const VAR_SCOPES = new Set<ScopeKind>(["global", "module", "function", "static_block"]);
+// Children evaluated outside the scope their parent creates: method keys, decorators, the switch discriminant.
+const OUTER_KEYS = new Set(["key", "decorators", "discriminant"]);
+
+const hashOf = (n: Node): string | null => {
+    const sig = (n as Node & { [CS_MAST_SIGNATURE_KEY]?: string })[CS_MAST_SIGNATURE_KEY];
+    // Only the digest: the signature prefix lists every sinc type (~4.6 KB) and is identical on every node.
+    return sig?.slice(sig.lastIndexOf("$") + 1) ?? null;
+};
+
+// id: unique per graph (file + owner position). signature: content-derived like `hash`, so identical code in two places shares it.
+function scopeRow(kind: ScopeKind, owner: Node, file: string): ScopeRow {
+    const ownerSig = hashOf(owner);
+    return {
+        id: `${SCOPE}_${sha256(`${file}\0${owner.type}\0${owner.start}\0${owner.end}`).slice(0, 16)}`,
+        kind,
+        file,
+        signature: ownerSig && sha256(`scope:${kind}:${ownerSig}`),
+        owner_signature: ownerSig,
+    };
+}
+
+/** Flatten a Babel AST into per-type node rows, Scope rows and per-(from,to)-type edges. */
 export function flatten(ast: Node, file: string) {
     const ids = new Map<Node, string>();
     const idOf = (n: Node) => {
@@ -146,18 +204,32 @@ export function flatten(ast: Node, file: string) {
     const ref = (v: unknown): Ref | unknown => (isNode(v) ? { type: v.type, slug_ref: idOf(v) } : v);
 
     const nodes = new Map<string, Row[]>();
-    const rels: Record<Rel, Edges> = { SON: new Map(), DECLARES: new Map() };
-    const push = (rel: Rel, from: Node, to: Node, e: Edge) => {
-        const pair = `${from.type}\0${to.type}`;
+    const scopes: ScopeRow[] = [];
+    const rels = relMaps();
+    const push = (rel: Rel, from: string, to: string, e: Edge) => {
+        const pair = `${from}\0${to}`;
         if (!rels[rel].has(pair)) rels[rel].set(pair, []);
         rels[rel].get(pair)!.push(e);
     };
 
     // Iterative walk: minified bundles nest deep enough to blow the JS stack.
-    const stack: Node[] = [ast];
+    // Each entry carries its parent and the scopes it sits in: `scope` for lexical bindings, `varScope` for var.
+    type Ctx = { scope?: string; varScope?: string };
+    const stack: [Node, Node | undefined, Ctx][] = [[ast, undefined, {}]];
     while (stack.length) {
-        const node = stack.pop()!;
+        const [node, parent, outer] = stack.pop()!;
         const id = idOf(node);
+
+        const kind = scopeKind(node, parent);
+        let inner = outer;
+        if (kind) {
+            const s = scopeRow(kind, node, file);
+            scopes.push(s);
+            push("CREATES_SCOPE", node.type, SCOPE, { from: id, to: s.id! });
+            if (outer.scope) push("PARENT_SCOPE", SCOPE, SCOPE, { from: s.id!, to: outer.scope });
+            inner = { scope: s.id!, varScope: VAR_SCOPES.has(kind) ? s.id! : outer.varScope };
+        }
+
         const keys: readonly string[] = VISITOR_KEYS[node.type] ?? [];
         const props: Record<string, unknown> = {};
 
@@ -171,14 +243,23 @@ export function flatten(ast: Node, file: string) {
             props[k] = Array.isArray(v) ? v.map(ref) : ref(v);
             (Array.isArray(v) ? v : [v]).forEach((child, i) => {
                 if (!isNode(child)) return;
-                push("SON", node, child, { from: id, to: idOf(child), key: k, idx: Array.isArray(v) ? i : -1 });
-                stack.push(child);
+                push("SON", node.type, child.type, { from: id, to: idOf(child), key: k, idx: Array.isArray(v) ? i : -1 });
+                stack.push([child, node, OUTER_KEYS.has(k) ? outer : inner]);
             });
         }
         // Same idOf() as SON, so DECLARES targets are the existing Identifier nodes.
-        for (const t of declared(node)) push("DECLARES", node, t, { from: id, to: idOf(t) });
+        // Every DECLARES target gets its IN_SCOPE from the same declared() call, so the two can't disagree.
+        for (const t of declared(node)) {
+            push("DECLARES", node.type, t.type, { from: id, to: idOf(t) });
+            let s: string | undefined;
+            if (node.type === "VariableDeclarator") s = (parent as Node & { kind?: string }).kind === "var" ? outer.varScope : outer.scope;
+            // A function/class declaration's own name binds outside it; a named expression's name, params and catch params bind inside.
+            else if (kind && !(t === (node as { id?: Node | null }).id && node.type.endsWith("Declaration"))) s = inner.scope;
+            else s = outer.scope;
+            if (s) push("IN_SCOPE", t.type, SCOPE, { from: idOf(t), to: s });
+        }
 
-        const n = node as Node & { name?: unknown; value?: unknown; operator?: unknown; [CS_MAST_SIGNATURE_KEY]?: string };
+        const n = node as Node & { name?: unknown; value?: unknown; operator?: unknown };
         if (!nodes.has(node.type)) nodes.set(node.type, []);
         nodes.get(node.type)!.push({
             id,
@@ -194,11 +275,10 @@ export function flatten(ast: Node, file: string) {
             value: scalar(n.value),
             operator: typeof n.operator === "string" ? n.operator : null,
             props: JSON.stringify(props, (_, v) => (typeof v === "bigint" ? v.toString() : v)),
-            // Only the digest: the signature prefix lists every sinc type (~4.6 KB) and is identical on every node.
-            hash: n[CS_MAST_SIGNATURE_KEY]?.slice(n[CS_MAST_SIGNATURE_KEY].lastIndexOf("$") + 1) ?? null,
+            hash: hashOf(node),
         });
     }
-    return { rootId: idOf(ast), nodes, rels };
+    return { rootId: idOf(ast), nodes, scopes, rels };
 }
 
 /** A LadybugDB-backed graph of one or more parsed JS files. */
@@ -218,11 +298,13 @@ export class TaintGraph {
     static async open(dbPath = ":memory:", { parser = "cs-mast" }: { parser?: Parser } = {}): Promise<TaintGraph> {
         const db = new lbug.Database(dbPath, 0, true, false, MAX_DB_SIZE);
         const conn = new lbug.Connection(db);
-        const g = new TaintGraph(db, conn, new Set(), { SON: new Set(), DECLARES: new Set() }, parser);
+        const relPairs = Object.fromEntries(Object.keys(RELS).map((r) => [r, new Set()])) as Record<Rel, Set<string>>;
+        const g = new TaintGraph(db, conn, new Set(), relPairs, parser);
         // Each file's source is stored once; node code is sliced from it by offset (see code()).
         await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SOURCE}(file STRING PRIMARY KEY, code STRING)`);
+        await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SCOPE}(${Object.entries(SCOPE_COLUMNS).map(([c, t]) => `${c} ${t}`).join(", ")})`);
         for (const t of await g.query("CALL show_tables() RETURN name, type")) {
-            if (t.type === "NODE" && t.name !== SOURCE) g.tables.add(t.name as string);
+            if (t.type === "NODE" && t.name !== SOURCE && t.name !== SCOPE) g.tables.add(t.name as string);
             if (t.type === "REL" && (t.name as string) in RELS) {
                 for (const c of await g.query(`CALL show_connection('${t.name}') RETURN *`))
                     g.relPairs[t.name as Rel].add(`${c["source table name"]}\0${c["destination table name"]}`);
@@ -233,10 +315,10 @@ export class TaintGraph {
 
     /** Parse `code` and load its AST into the graph. Returns the id of the File node. */
     async add(code: string, filename = "input.js"): Promise<string> {
-        const { rootId, nodes, rels } = flatten(parseAst(code, this.parser), filename);
+        const { rootId, nodes, scopes, rels } = flatten(parseAst(code, this.parser), filename);
         // Source first: a duplicate filename fails on the primary key before any nodes are loaded.
         await this.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, { file: filename, code });
-        await this.load(nodes, rels);
+        await this.load(nodes, scopes, rels);
         return rootId;
     }
 
@@ -263,7 +345,7 @@ export class TaintGraph {
     async save(dbPath: string): Promise<void> {
         if (existsSync(dbPath)) throw new Error(`taintwire: refusing to overwrite existing ${dbPath}`);
         const nodes = new Map<string, Row[]>();
-        const rels: Record<Rel, Edges> = { SON: new Map(), DECLARES: new Map() };
+        const rels = relMaps();
         const cols = Object.keys(COLUMNS).map((c) => `n.${c} AS ${c}`).join(", ");
         for (const type of this.tables) nodes.set(type, (await this.query(`MATCH (n:\`${type}\`) RETURN ${cols}`)) as Row[]);
         for (const rel of Object.keys(RELS) as Rel[])
@@ -273,11 +355,12 @@ export class TaintGraph {
                 const q = `MATCH (a:\`${from}\`)-[e:${rel}]->(b:\`${to}\`) RETURN a.id AS from, b.id AS to${props}`;
                 rels[rel].set(pair, (await this.query(q)) as Edge[]);
             }
+        const scopes = (await this.query(`MATCH (s:${SCOPE}) RETURN ${Object.keys(SCOPE_COLUMNS).map((c) => `s.${c} AS ${c}`).join(", ")}`)) as ScopeRow[];
         const sources = await this.query(`MATCH (s:${SOURCE}) RETURN s.file AS file, s.code AS code`);
         const out = await TaintGraph.open(dbPath);
         try {
             for (const s of sources) await out.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, s);
-            await out.load(nodes, rels);
+            await out.load(nodes, scopes, rels);
         } finally {
             await out.close();
         }
@@ -297,12 +380,13 @@ export class TaintGraph {
     }
 
     // COPY is Ladybug's bulk path; UNWIND+MATCH+CREATE for edges was ~4x slower overall.
-    private async load(nodes: Map<string, Row[]>, rels: Record<Rel, Edges>) {
+    private async load(nodes: Map<string, Row[]>, scopes: ScopeRow[], rels: Record<Rel, Edges>) {
         const cols = Object.keys(COLUMNS).map((c) => `r.${c}`).join(", ");
         for (const [type, rows] of nodes) {
             await this.ensureNodeTable(type);
             if (rows.length) await this.batched(`COPY \`${type}\` FROM (UNWIND $rows AS r RETURN ${cols})`, rows);
         }
+        if (scopes.length) await this.batched(`COPY ${SCOPE} FROM (UNWIND $rows AS r RETURN ${Object.keys(SCOPE_COLUMNS).map((c) => `r.${c}`).join(", ")})`, scopes);
         for (const rel of Object.keys(RELS) as Rel[]) {
             const props = RELS[rel].map((p) => `, r.${p.split(" ")[0]}`).join("");
             for (const [pair, rows] of rels[rel]) {

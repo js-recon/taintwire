@@ -1,5 +1,5 @@
 ---
-sidebar_position: 7
+sidebar_position: 8
 title: Testing
 ---
 
@@ -35,6 +35,10 @@ npm run build   # tsc into build/
 ### `src/declares.test.ts`: `DECLARES`
 
 A table of 36 snippet and expected-edge pairs, plus invariants over the fixtures. See [DECLARES: Coverage](declares.md#coverage).
+
+### `src/scopes.test.ts`: scopes
+
+A table of 29 snippets, each mapping every bound name to its scope chain, plus provenance, idempotency, parser-parity and persistence tests. See [Scopes: Coverage](scopes.md#coverage).
 
 ## CI
 

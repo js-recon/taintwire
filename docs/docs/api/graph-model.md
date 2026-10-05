@@ -55,11 +55,36 @@ Positions that Babel didn't record are `-1`.
 `Source(file STRING PRIMARY KEY, code STRING)` holds each file's full source once. `code()` slices node text from it. It isn't an AST table, so it has no `type` column. That matters for unlabelled matches:
 
 ```cypher
-// Counts AST nodes AND Source rows:
+// Counts AST nodes, Source rows AND Scope nodes:
 MATCH (n) RETURN count(*)
 // Counts AST nodes only:
 MATCH (n) WHERE n.type IS NOT NULL RETURN count(*)
 ```
+
+## The `Scope` table
+
+`Scope` nodes are semantic, not AST nodes: one per lexical environment (program, function, block, class and so on). They're always present, even in an empty graph. Like `Source`, they have no `type` column.
+
+| Column | Type | Contents |
+| --- | --- | --- |
+| `id` | `STRING` (primary key) | `Scope_<16 hex chars>`. Deterministic: derived from the file and the owner node's type and position, so re-importing the same source under the same filename gives the same id. |
+| `kind` | `STRING` | `global`, `module`, `function`, `block`, `catch`, `class` or `static_block`. |
+| `file` | `STRING` | The owner node's file. |
+| `signature` | `STRING` | 64 hex chars: `sha256("scope:<kind>:<owner_signature>")`. Identical code anywhere gets the same signature, like `hash`. `null` with the `babel` parser. |
+| `owner_signature` | `STRING` | The owner node's `hash`. `null` with the `babel` parser. |
+
+| Owner | Creates |
+| --- | --- |
+| `Program` | `module` when the file parsed as a module, otherwise `global`. The root, with no parent. |
+| `FunctionDeclaration`, `FunctionExpression`, `ArrowFunctionExpression`, `ObjectMethod`, `ClassMethod`, `ClassPrivateMethod` | `function`. The body `BlockStatement` doesn't get a scope of its own. |
+| `ClassDeclaration`, `ClassExpression` | `class`, for every class, named or not. |
+| `StaticBlock` | `static_block` |
+| `CatchClause` | `catch`. The body `BlockStatement` doesn't get a scope of its own. |
+| Any other `BlockStatement` | `block` |
+| `ForStatement`, `ForInStatement`, `ForOfStatement` | `block`, only when the loop declares with `let`, `const`, `using` or `await using`. |
+| `SwitchStatement` | `block`, one shared by every case. |
+
+See [Scopes](../implementation/scopes.md) for the full rules and what isn't modelled.
 
 ## Edges
 
@@ -96,7 +121,39 @@ Nothing else declares. In particular:
 - Assignment to existing names: `({ a } = o)`, `[c] = d`, `o.p = 1`.
 - A TypeScript `this` parameter.
 
-`DECLARES` says nothing about scope yet. A `FunctionDeclaration` declares its own name even though that name lives in the enclosing scope. Finding the declaration an identifier *refers to* needs scope analysis, which isn't built yet.
+`DECLARES` says which node introduced a binding, not where the binding lives. A `FunctionDeclaration` declares both its own name and its params, but the name lives in the enclosing scope and the params live inside the function. `IN_SCOPE` tells those apart.
+
+### `CREATES_SCOPE`
+
+`(owner)-[:CREATES_SCOPE]->(scope:Scope)` links each scope to the AST node that created it. Every scope has exactly one, and an owner creates at most one scope. No properties.
+
+### `PARENT_SCOPE`
+
+`(scope:Scope)-[:PARENT_SCOPE]->(parent:Scope)` links each scope to the lexical scope around it. Every scope except the file's root has exactly one, and it never crosses files. No properties.
+
+### `IN_SCOPE`
+
+`(binding:Identifier)-[:IN_SCOPE]->(scope:Scope)` links each `DECLARES` target to the scope it lives in. There's exactly one `IN_SCOPE` per `DECLARES` edge, and no other `Identifier` has one: uses of a name such as the `x` in `f(x)` aren't resolved yet. No properties.
+
+| Binding | Lives in |
+| --- | --- |
+| `var` | The nearest `function`, `static_block`, `module` or `global` scope. `var` skips blocks, loops, `switch` and `catch`. |
+| `let`, `const`, `using`, `await using` | The innermost scope. |
+| A `FunctionDeclaration` or `ClassDeclaration` name | The scope around the declaration. |
+| A `FunctionExpression` or `ClassExpression` name | Its own function or class scope. |
+| Function params | The function's own scope. |
+| Catch params | The catch scope. |
+| Imports | The module scope. |
+
+```text
+const f = function inner(a) { if (a) { var v; let l; } };
+
+Identifier f     -[:IN_SCOPE]-> Scope {kind: global}     (Program)
+Identifier inner -[:IN_SCOPE]-> Scope {kind: function}   (FunctionExpression)
+Identifier a     -[:IN_SCOPE]-> Scope {kind: function}
+Identifier v     -[:IN_SCOPE]-> Scope {kind: function}   (var skips the block)
+Identifier l     -[:IN_SCOPE]-> Scope {kind: block}      (BlockStatement, PARENT_SCOPE -> the function scope)
+```
 
 ## `props`
 
