@@ -39,7 +39,7 @@ Each new edge type is a `RELS` entry plus the emitting code in `flatten()` (or a
 | Unbounded `code()` source cache | Memory grows with the number of distinct files queried | LRU (marked `ponytail:` in the code) |
 | `save()` buffers the whole graph | The whole graph is held in JS memory during the copy | Stream per table, if graphs get that large |
 | Babel 7 (cs-mast) tree walked with Babel 8 `VISITOR_KEYS` | A field renamed between versions would turn a subtree into `props` JSON | Guarded by the parser-parity test. Re-check when either Babel is bumped. |
-| Labels exist only once seen | Matching an absent type is a binder error | Pre-create all tables, at the cost of about 250 empty tables per graph |
+| Node labels exist only once seen | Matching an absent node type is a binder error (edge tables always exist) | Pre-create all tables, at the cost of about 250 empty tables per graph |
 | Simplified scope model | No per-iteration loop scopes, no separate parameter scope, no Annex B function hoisting, no TypeScript namespace scopes | Add them when resolution needs them. See [Scopes: What isn't modelled](scopes.md#what-isnt-modelled) |
 | LadybugDB inline-filter bug | `(n {p: v})` followed by an `OPTIONAL MATCH` that finds nothing returns `n`'s properties as `null` | Filter with `WHERE` ([Query cookbook](../api/queries.md#inline-property-maps-before-optional-match)) |
 | Flow-insensitive bindings | Every write of a variable reaches every read of it, whatever the order, and `FLOWS_TO` has cycles | Reaching definitions or SSA ([Value flow](value-flow.md#flow-insensitive-bindings)) |

@@ -87,6 +87,19 @@ const RELS = {
     FLOWS_TO: [],
 } as const;
 type Rel = keyof typeof RELS;
+// Ladybug rel tables need at least one FROM/TO pair. open() creates every rel table up front with one real pair
+// (and that pair's node tables), so `MATCH ()-[:REFERS_TO]->()` on a graph with none is empty rather than a binder error.
+const DEFAULT_PAIRS: Record<Rel, [string, string]> = {
+    SON: ["File", "Program"],
+    DECLARES: ["VariableDeclarator", "Identifier"],
+    CREATES_SCOPE: ["Program", "Scope"],
+    PARENT_SCOPE: ["Scope", "Scope"],
+    IN_SCOPE: ["Identifier", "Scope"],
+    REFERS_TO: ["Identifier", "Identifier"],
+    READS: ["CallExpression", "Identifier"],
+    WRITES: ["VariableDeclarator", "Identifier"],
+    FLOWS_TO: ["Identifier", "Identifier"],
+};
 const relMaps = () => Object.fromEntries(Object.keys(RELS).map((r) => [r, new Map()])) as Record<Rel, Edges>;
 
 // Scope nodes: semantic, not AST, so they get their own table. Ids are deterministic (see scopeRow()).
@@ -440,6 +453,12 @@ export class TaintGraph {
                     g.relPairs[t.name as Rel].add(`${c["source table name"]}\0${c["destination table name"]}`);
             }
         }
+        for (const [rel, [from, to]] of Object.entries(DEFAULT_PAIRS) as [Rel, [string, string]][]) {
+            if (g.relPairs[rel].size) continue;
+            await g.ensureNodeTable(from);
+            await g.ensureNodeTable(to);
+            await g.ensureRelPair(rel, from, to);
+        }
         return g;
     }
 
@@ -538,7 +557,7 @@ export class TaintGraph {
     }
 
     private async ensureNodeTable(type: string) {
-        if (this.tables.has(type)) return;
+        if (this.tables.has(type) || type === SCOPE) return;
         const cols = Object.entries(COLUMNS).map(([c, t]) => `${c} ${t}`).join(", ");
         await this.query(`CREATE NODE TABLE \`${type}\`(${cols})`);
         this.tables.add(type);

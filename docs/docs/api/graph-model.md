@@ -28,7 +28,10 @@ Follow the Babel AST and you're following the graph. [AST Explorer](https://aste
 
 Each Babel node type gets its own node table, named after the type: `File`, `Program`, `CallExpression`, `Identifier`, `JSXElement`, `TSTypeAnnotation` and so on. `MATCH (c:CallExpression)` scans only call expressions.
 
-A table is created the first time its node type is seen. If no file in the graph has a `WithStatement`, then `MATCH (n:WithStatement)` fails with `Table WithStatement does not exist`, rather than returning no rows.
+A table is created the first time its node type is seen. If no file in the graph has a `WithStatement`, then `MATCH (n:WithStatement)` fails with `Table WithStatement does not exist`, rather than returning no rows. There are two exceptions:
+
+- Every edge table exists as soon as the graph is opened, so `MATCH ()-[:REFERS_TO]->()` on a graph with no references returns no rows.
+- The few node tables those edge tables are first declared between always exist too: `File`, `Program`, `Identifier`, `VariableDeclarator`, `CallExpression`, `FunctionDeclaration` and `ReturnStatement`.
 
 Every AST table has the same columns:
 

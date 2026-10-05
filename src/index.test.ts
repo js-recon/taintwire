@@ -135,3 +135,33 @@ test("cs-mast parse errors point at the babel parser, which recovers", async () 
     expect(d.n).toBe(2);
     await g.close();
 });
+
+test("every edge table exists from open(), so an empty relation is zero rows, not a binder error", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
+    const rels = ["SON", "DECLARES", "CREATES_SCOPE", "PARENT_SCOPE", "IN_SCOPE", "REFERS_TO", "READS", "WRITES", "FLOWS_TO"];
+    const counts = async (g: taintwire.TaintGraph) => {
+        const out: Record<string, unknown> = {};
+        for (const r of rels) out[r] = (await g.query(`MATCH ()-[e:${r}]->() RETURN count(e) AS n`))[0].n;
+        return out;
+    };
+    try {
+        const empty = await taintwire.TaintGraph.open();
+        expect(await counts(empty)).toEqual(Object.fromEntries(rels.map((r) => [r, 0])));
+        await empty.close();
+        // nothing here resolves, reads, writes or flows into a binding
+        const g = await taintwire.import("console.log(location.search);", { filename: "globals.js" });
+        expect((await g.query("MATCH ()-[r:REFERS_TO]->() RETURN r"))).toEqual([]);
+        const c = await counts(g);
+        expect([c.REFERS_TO, c.READS, c.WRITES, c.DECLARES, c.IN_SCOPE]).toEqual([0, 0, 0, 0, 0]);
+        // the tables survive save() and a reopen, and still take new pairs
+        await g.save(join(dir, "g.lbug"));
+        await g.close();
+        const reopened = await taintwire.TaintGraph.open(join(dir, "g.lbug"));
+        expect(await counts(reopened)).toEqual(c);
+        await reopened.add("const a = 1; a;", "late.js");
+        expect((await reopened.query("MATCH (s)-[:READS]->(:Identifier) RETURN s.type AS s"))).toEqual([{ s: "ExpressionStatement" }]);
+        await reopened.close();
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});

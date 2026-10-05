@@ -13,7 +13,7 @@ taintwire stores graphs in [LadybugDB](https://ladybugdb.com/) 0.21.2 through `@
 | --- | --- | --- |
 | `Source(file STRING PRIMARY KEY, code STRING)` | node | By `open()`, `IF NOT EXISTS` |
 | One table per Babel node type, all with the `COLUMNS` set | node | By `ensureNodeTable()`, the first time the type is loaded |
-| `SON(key STRING, idx INT64)` | edge, many FROM/TO pairs | By `ensureRelPair()`, the first time a (parent type, child type) pair is loaded |
+| `SON(key STRING, idx INT64)` | edge, many FROM/TO pairs | By `open()` with one default pair (`DEFAULT_PAIRS`). Further pairs are added by `ensureRelPair()` the first time a (parent type, child type) pair is loaded. |
 | `Scope(id STRING PRIMARY KEY, kind, file, signature, owner_signature)` | node | By `open()`, `IF NOT EXISTS` |
 | `DECLARES()` | edge, many FROM/TO pairs | Same as `SON` |
 | `CREATES_SCOPE()` | edge, one pair per owner type (`FunctionDeclaration -> Scope`, ...) | Same as `SON` |
@@ -23,6 +23,12 @@ taintwire stores graphs in [LadybugDB](https://ladybugdb.com/) 0.21.2 through `@
 | `READS(access STRING, access_signature STRING)` | edge, many FROM/TO pairs (operation type `-> Identifier`) | Same as `SON` |
 | `WRITES(access STRING, access_signature STRING)` | edge, many FROM/TO pairs | Same as `SON` |
 | `FLOWS_TO()` | edge, many FROM/TO pairs (any expression type to any other) | Same as `SON` |
+
+### Every edge table exists from the start
+
+Ladybug can't create an edge table without a FROM/TO pair. When a graph is opened, any edge table in `RELS` that doesn't exist yet is created with one real pair from `DEFAULT_PAIRS`, for example `REFERS_TO: Identifier -> Identifier` or `READS: CallExpression -> Identifier`. The node tables for that pair are created at the same time. As a result, `MATCH ()-[:CALLS]->()` is an empty result on a graph with no resolved calls, not `Table CALLS does not exist`. The same applies to a reopened database written by an older version.
+
+Node tables stay lazy, apart from those few. Creating all of them up front would add about 250 empty tables to every graph.
 
 ### Why a table per node type
 

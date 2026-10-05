@@ -196,7 +196,7 @@ RETURN n.type AS type, count(*) AS n ORDER BY n DESC
 
 ### Labels only exist once seen
 
-A node table is created when its type first appears. On a graph without numeric literals, `MATCH (n:NumericLiteral)` fails with `Binder exception: Table NumericLiteral does not exist.` To query a type that may be absent, match unlabelled on the `type` column, which is slower:
+A node table is created when its type first appears. Edge tables always exist; see [Graph model](graph-model.md#node-tables). On a graph without numeric literals, `MATCH (n:NumericLiteral)` fails with `Binder exception: Table NumericLiteral does not exist.` To query a type that may be absent, match unlabelled on the `type` column, which is slower:
 
 ```cypher
 MATCH (n) WHERE n.type = 'NumericLiteral' RETURN n.id
