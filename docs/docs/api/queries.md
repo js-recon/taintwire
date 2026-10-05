@@ -94,6 +94,69 @@ MATCH (:Program {file: $file})-[:CREATES_SCOPE]->(s:Scope)<-[:IN_SCOPE]-(i:Ident
 RETURN i.name AS name, s.kind AS kind
 ```
 
+### What a name refers to
+
+```cypher
+MATCH (u:Identifier)-[:REFERS_TO]->(d:Identifier)<-[:DECLARES]-(by)
+WHERE u.id = $id
+RETURN d.id AS decl, d.line AS line, by.type AS declaredBy
+```
+
+No row means the name is unresolved: a global, a host API such as `location`, or not a reference at all, like the `foo` in `obj.foo`.
+
+### Every read and write of a variable
+
+```cypher
+MATCH (op)-[r:READS|WRITES]->(d:Identifier), (u:Identifier)
+WHERE d.id = $decl AND u.id = r.access
+RETURN label(r) AS access, op.type AS op, u.line AS line, u.col AS col
+ORDER BY line, col
+```
+
+`$decl` is the declaration `Identifier` (a `DECLARES` target). `r.access` is the exact occurrence, so `u` is the `x` in the code, not the declaration. For `let u = "/api?" + h; u += "&x=1"; fetch(u);` this returns a `WRITES` from the `VariableDeclarator`, a `WRITES` and a `READS` from the compound `AssignmentExpression`, and a `READS` from the `CallExpression`.
+
+### What flows into a variable
+
+```cypher
+MATCH (v)-[:FLOWS_TO]->(d:Identifier)
+WHERE d.id = $decl
+RETURN v.type AS type, v.line AS line
+```
+
+These are the values that are ever assigned to the variable: initializers, assignments and updates, in any order.
+
+### From a source to a sink
+
+```cypher
+MATCH (m:MemberExpression)-[:SON {key: 'object'}]->(:Identifier {name: 'location'}),
+      (m)-[:SON {key: 'property'}]->(:Identifier {name: 'hash'}),
+      p = (m)-[:FLOWS_TO* ACYCLIC 1..30]->(arg),
+      (c:CallExpression)-[:SON {key: 'arguments'}]->(arg),
+      (c)-[:SON {key: 'callee'}]->(:Identifier {name: 'fetch'})
+RETURN c.id AS call, c.line AS line, min(length(p)) AS hops
+```
+
+This finds `fetch(u)` in:
+
+```js
+const h = location.hash;
+let u = "/api?" + h;
+u += "&x=1";
+fetch(u);
+```
+
+To see the route, ask for one shortest path and list its nodes:
+
+```cypher
+MATCH (m:MemberExpression)-[:SON {key: 'property'}]->(:Identifier {name: 'hash'}),
+      p = (m)-[:FLOWS_TO* SHORTEST 1..30]->(arg),
+      (:CallExpression)-[:SON {key: 'arguments'}]->(arg)
+RETURN properties(nodes(p), 'type') AS path, properties(nodes(p), 'line') AS lines
+// path: [MemberExpression, Identifier h (decl), Identifier h, BinaryExpression, Identifier u (decl), Identifier u]
+```
+
+`FLOWS_TO` stops at calls and property reads for now. `fetch(location.hash.slice(1))` has no path, because the `.slice(1)` call is opaque. See [Value flow: Deferred](../implementation/value-flow.md#deferred).
+
 ### The function enclosing a node
 
 ```cypher
@@ -151,6 +214,18 @@ CALL var_length_extend_max_depth=200
 await graph.query("CALL var_length_extend_max_depth=200");
 await graph.query("MATCH (f:FunctionDeclaration)-[:SON*1..200]->(c:CallExpression) RETURN count(c)");
 ```
+
+### `FLOWS_TO` paths have cycles
+
+A variable's declaration is the summary of every value it holds, so `x = x + 1` makes a cycle, `x (decl) → x → x + 1 → x = x + 1 → x (decl)`. A plain `-[:FLOWS_TO*1..30]->` walks around it and returns the same route many times. Use Ladybug's recursive-path semantics:
+
+| Syntax | Meaning |
+| --- | --- |
+| `-[:FLOWS_TO* ACYCLIC 1..30]->` | No node repeats. Usually what you want. |
+| `-[:FLOWS_TO* TRAIL 1..30]->` | No edge repeats. |
+| `-[:FLOWS_TO* SHORTEST 1..30]->` | One shortest path per pair. |
+
+On `let x = source; x = x + 1; sink(x);`, the path count from `source` to an `x` is 9 with plain `*`, 6 with `ACYCLIC` and 5 with `TRAIL`.
 
 ### `MATCH (n)` includes `Source` and `Scope`
 

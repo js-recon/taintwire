@@ -5,7 +5,7 @@ title: Scopes
 
 # Scopes
 
-Scope construction adds `Scope` nodes to the graph, which record where each JavaScript binding lives. [`DECLARES`](declares.md) records which syntax introduced a binding. Scopes add the other half: which lexical environment holds it. Together they're what `REFERS_TO` will resolve names against. See the [roadmap](roadmap.md).
+Scope construction adds `Scope` nodes to the graph, which record where each JavaScript binding lives. [`DECLARES`](declares.md) records which syntax introduced a binding. Scopes add the other half: which lexical environment holds it. Together they're what [`REFERS_TO`](references.md) resolves names against.
 
 ```text
 function foo(a) { const x = 1; }
@@ -29,7 +29,7 @@ Scope construction answers four questions:
 - What is each scope's parent?
 - Which scope owns each declared binding?
 
-It doesn't answer "which declaration does this identifier refer to". That's the job of `REFERS_TO`, a separate later pass. The `x` in `console.log(x)` has no scope edge.
+It doesn't answer "which declaration does this identifier refer to". That's [`REFERS_TO`](references.md), which runs after the walk and uses these scopes. The `x` in `console.log(x)` has no scope edge of its own.
 
 ## Which nodes create scopes
 
@@ -136,7 +136,7 @@ These are deliberate. Each needs either a later pass or control flow, which this
 
 | Not modelled | Example | Why |
 | --- | --- | --- |
-| References (`REFERS_TO`) | `console.log(x)` | The next pass. Uses of a name get no edge here. |
+| References (`REFERS_TO`) | `console.log(x)` | A separate pass over this scope tree. See [References](references.md). |
 | Hoisting | `foo(); function foo() {}` | Nothing moves. `foo` is simply `IN_SCOPE` of the program scope, and the declaration stays where it is. |
 | Temporal dead zone | `console.log(x); let x = 1;` | Initialization state is control flow, not scope. |
 | Per-iteration loop environments | `for (let i...) fns.push(() => i)` | The loop gets one scope. Static name resolution doesn't need one per iteration. |

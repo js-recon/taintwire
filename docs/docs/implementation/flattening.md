@@ -21,7 +21,7 @@ Each entry carries the node's parent and its scope context (`{ scope, varScope }
 
 The walk uses an explicit stack, not recursion, because minified bundles nest deeply enough to overflow the JS call stack. Children are found through Babel's `VISITOR_KEYS[node.type]`, the same table Babel's own traversal uses. Node types missing from `VISITOR_KEYS` are treated as leaves.
 
-The visit order is depth-first and reversed, since it's a stack. That doesn't matter, because order is kept explicitly in `SON.idx`.
+The visit order is depth-first and reversed, since it's a stack. That doesn't matter for the AST, because order is kept explicitly in `SON.idx`. It does matter for name resolution, which is why that runs after the walk (see [below](#after-the-walk)).
 
 ## Ids
 
@@ -74,3 +74,13 @@ rels: Record<Rel, Map<string, Edge[]>>;   // "FromType\0ToType" -> edges, per ed
 ```
 
 The grouping follows how [storage](storage.md) works. Each node type is its own table, and LadybugDB's `COPY` into an edge table with several FROM/TO pairs has to name one `(from, to)` pair per statement. Grouping up front gives `load()` one `COPY` per group. `\0` separates the pair because it can't appear in a type name.
+
+## After the walk
+
+`REFERS_TO`, `READS`, `WRITES` and `FLOWS_TO` can't be emitted during the walk. A use can be visited before the declaration it resolves to, because of hoisting, uses inside functions declared earlier, and the reversed visit order. So during the walk `flatten()` only records facts as AST nodes:
+
+- each scope's parent and each scope's bindings by name, alongside `PARENT_SCOPE` and `IN_SCOPE`
+- each candidate reference `Identifier`, with its parent and scope (`isRef()`)
+- each node's flows and writes (`facts()`)
+
+Once the walk ends, a post-pass resolves each reference up the scope chain and turns the recorded facts into edges. It's still one walk over the tree, plus one pass over the recorded lists. See [References](references.md#resolution) and [Value flow](value-flow.md#rules).

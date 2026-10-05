@@ -73,7 +73,19 @@ const COLUMNS = {
 const SKIP_PROPS = new Set(["type", "start", "end", "loc", "range", "leadingComments", "trailingComments", "innerComments", "comments", "errors", "tokens", CS_MAST_SIGNATURE_KEY]);
 
 // Rel tables and their property columns. SON is AST containment; the rest are semantic overlays.
-const RELS = { SON: ["key STRING", "idx INT64"], DECLARES: [], CREATES_SCOPE: [], PARENT_SCOPE: [], IN_SCOPE: [] } as const;
+// READS/WRITES carry the Identifier occurrence: `access` (its node id) and `access_signature` (its hash, which is content-only).
+const ACCESS = ["access STRING", "access_signature STRING"] as const;
+const RELS = {
+    SON: ["key STRING", "idx INT64"],
+    DECLARES: [],
+    CREATES_SCOPE: [],
+    PARENT_SCOPE: [],
+    IN_SCOPE: [],
+    REFERS_TO: [],
+    READS: ACCESS,
+    WRITES: ACCESS,
+    FLOWS_TO: [],
+} as const;
 type Rel = keyof typeof RELS;
 const relMaps = () => Object.fromEntries(Object.keys(RELS).map((r) => [r, new Map()])) as Record<Rel, Edges>;
 
@@ -83,7 +95,7 @@ export type ScopeKind = "global" | "module" | "function" | "block" | "catch" | "
 type ScopeRow = Record<keyof typeof SCOPE_COLUMNS, string | null>;
 
 type Row = Record<keyof typeof COLUMNS, string | number | null>;
-type Edge = { from: string; to: string; key?: string; idx?: number };
+type Edge = { from: string; to: string; key?: string; idx?: number; access?: string; access_signature?: string | null };
 type Edges = Map<string, Edge[]>; // key: `${fromType}\0${toType}`
 type Ref = { type: string; slug_ref: string };
 
@@ -192,6 +204,73 @@ function scopeRow(kind: ScopeKind, owner: Node, file: string): ScopeRow {
     };
 }
 
+// TS nodes whose `expression` is a runtime value; every other Identifier under a TS node is type-level.
+const TS_VALUES = new Set(["TSAsExpression", "TSSatisfiesExpression", "TSNonNullExpression", "TSTypeAssertion", "TSInstantiationExpression", "TSExportAssignment"]);
+
+/** Whether the Identifier at `parent[key]` is a lexical name lookup, not a property name, label, import/export name or type. */
+export function isRef(parent: Node, key: string): boolean {
+    if (key === "label" || key === "imported" || key === "exported") return false;
+    if ((key === "key" || key === "property") && !(parent as { computed?: boolean }).computed) return false;
+    if (parent.type === "PrivateName") return false;
+    return !parent.type.startsWith("TS") || (TS_VALUES.has(parent.type) && key === "expression");
+}
+
+// Value-flow and binding-write facts, in AST nodes; flatten() resolves targets to declarations once every binding is known.
+type Facts = {
+    flows: [Node, Node][]; // value -> the expression/statement it contributes to
+    stores: [Node, Node][]; // value -> the binding of a target Identifier
+    writes: [Node, Node][]; // operation -> target Identifier
+    writeOnly: Set<Node>; // target Identifiers that aren't also read
+};
+
+// Calls, member access, object/array literals, destructuring, iteration and await/yield add no flow yet (see docs/value-flow).
+function facts(node: Node, f: Facts) {
+    const into = (...xs: (Node | null | undefined)[]) => xs.forEach((x) => x && f.flows.push([x, node]));
+    const write = (ts: Node[], only = false) => ts.forEach((t) => (f.writes.push([node, t]), only && f.writeOnly.add(t)));
+    switch (node.type) {
+        case "BinaryExpression":
+        case "LogicalExpression":
+            return into(node.left as Node, node.right);
+        case "ConditionalExpression": // the test picks a value but isn't one: control, not data
+            return into(node.consequent, node.alternate);
+        case "UnaryExpression": // void is always undefined; delete's result says whether a property went away
+            if (node.operator !== "void" && node.operator !== "delete") into(node.argument);
+            return;
+        case "TemplateLiteral":
+            return into(...(node.expressions as Node[]));
+        case "SequenceExpression": // only the last expression is the result
+            return into(node.expressions.at(-1));
+        case "ReturnStatement":
+            return into(node.argument);
+        case "UpdateExpression": // prefix and postfix both depend on the old value
+            into(node.argument);
+            write(bindingIds(node.argument));
+            if (node.argument.type === "Identifier") f.stores.push([node, node.argument]);
+            return;
+        case "AssignmentExpression": // the expression's value is the right side (combined with the old value if compound)
+            into(node.right, node.operator === "=" ? null : (node.left as Node));
+            write(bindingIds(node.left as Node), node.operator === "=");
+            if (node.left.type === "Identifier") f.stores.push([node, node.left]);
+            return;
+        case "VariableDeclarator":
+            if (!node.init) return;
+            write(bindingIds(node.id));
+            if (node.id.type === "Identifier") f.stores.push([node.init, node.id]);
+            return;
+        case "AssignmentPattern": // a default value
+            write(bindingIds(node.left));
+            if (node.left.type === "Identifier") f.stores.push([node.right, node.left]);
+            return;
+        case "ForInStatement":
+        case "ForOfStatement": {
+            const decl = node.left.type === "VariableDeclaration";
+            return write(decl ? (node.left as Node & { declarations: { id: Node }[] }).declarations.flatMap((d) => bindingIds(d.id)) : bindingIds(node.left), !decl);
+        }
+        default:
+            if (TS_VALUES.has(node.type) && node.type !== "TSExportAssignment") into((node as Node & { expression: Node }).expression);
+    }
+}
+
 /** Flatten a Babel AST into per-type node rows, Scope rows and per-(from,to)-type edges. */
 export function flatten(ast: Node, file: string) {
     const ids = new Map<Node, string>();
@@ -211,6 +290,15 @@ export function flatten(ast: Node, file: string) {
         if (!rels[rel].has(pair)) rels[rel].set(pair, []);
         rels[rel].get(pair)!.push(e);
     };
+    const edge = (rel: Rel, a: Node, b: Node, e: Partial<Edge> = {}) => push(rel, a.type, b.type, { from: idOf(a), to: idOf(b), ...e });
+
+    // Recorded during the walk, resolved after it: a use can come before its declaration, and later siblings are walked first.
+    const parentScope = new Map<string, string>();
+    const bindings = new Map<string, Map<string, Node>>(); // scope -> name -> its first declaration
+    const declScope = new Map<Node, string>(); // DECLARES target -> its scope
+    const uses: [Node, Node, string | undefined][] = []; // [Identifier, the operation it's an operand of, its scope]
+    const notRef = new Set<Node>(); // `export { a } from "x"`: `a` is the other module's name
+    const f: Facts = { flows: [], stores: [], writes: [], writeOnly: new Set() };
 
     // Iterative walk: minified bundles nest deep enough to blow the JS stack.
     // Each entry carries its parent and the scopes it sits in: `scope` for lexical bindings, `varScope` for var.
@@ -226,7 +314,10 @@ export function flatten(ast: Node, file: string) {
             const s = scopeRow(kind, node, file);
             scopes.push(s);
             push("CREATES_SCOPE", node.type, SCOPE, { from: id, to: s.id! });
-            if (outer.scope) push("PARENT_SCOPE", SCOPE, SCOPE, { from: s.id!, to: outer.scope });
+            if (outer.scope) {
+                push("PARENT_SCOPE", SCOPE, SCOPE, { from: s.id!, to: outer.scope });
+                parentScope.set(s.id!, outer.scope);
+            }
             inner = { scope: s.id!, varScope: VAR_SCOPES.has(kind) ? s.id! : outer.varScope };
         }
 
@@ -244,9 +335,13 @@ export function flatten(ast: Node, file: string) {
             (Array.isArray(v) ? v : [v]).forEach((child, i) => {
                 if (!isNode(child)) return;
                 push("SON", node.type, child.type, { from: id, to: idOf(child), key: k, idx: Array.isArray(v) ? i : -1 });
-                stack.push([child, node, OUTER_KEYS.has(k) ? outer : inner]);
+                const ctx = OUTER_KEYS.has(k) ? outer : inner;
+                stack.push([child, node, ctx]);
+                if (child.type === "Identifier" && isRef(node, k)) uses.push([child, node, ctx.scope]);
             });
         }
+        if (node.type === "ExportNamedDeclaration" && node.source) for (const s of node.specifiers) if (s.type === "ExportSpecifier") notRef.add(s.local);
+        facts(node, f);
         // Same idOf() as SON, so DECLARES targets are the existing Identifier nodes.
         // Every DECLARES target gets its IN_SCOPE from the same declared() call, so the two can't disagree.
         for (const t of declared(node)) {
@@ -256,7 +351,14 @@ export function flatten(ast: Node, file: string) {
             // A function/class declaration's own name binds outside it; a named expression's name, params and catch params bind inside.
             else if (kind && !(t === (node as { id?: Node | null }).id && node.type.endsWith("Declaration"))) s = inner.scope;
             else s = outer.scope;
-            if (s) push("IN_SCOPE", t.type, SCOPE, { from: idOf(t), to: s });
+            if (!s) continue;
+            push("IN_SCOPE", t.type, SCOPE, { from: idOf(t), to: s });
+            declScope.set(t, s);
+            // `var x; var x;` or a param redeclared by `var`: one binding, summarised by its first declaration
+            if (!bindings.has(s)) bindings.set(s, new Map());
+            const names = bindings.get(s)!;
+            const first = names.get((t as Node & { name: string }).name);
+            if (!first || t.start! < first.start!) names.set((t as Node & { name: string }).name, t);
         }
 
         const n = node as Node & { name?: unknown; value?: unknown; operator?: unknown };
@@ -277,6 +379,34 @@ export function flatten(ast: Node, file: string) {
             props: JSON.stringify(props, (_, v) => (typeof v === "bigint" ? v.toString() : v)),
             hash: hashOf(node),
         });
+    }
+
+    // REFERS_TO: the nearest enclosing scope that binds the name. Unresolved names (globals, host APIs) get no edge.
+    const refers = new Map<Node, Node>();
+    for (const [use, op, scope] of uses) {
+        if (declScope.has(use) || notRef.has(use)) continue;
+        const name = (use as Node & { name: string }).name;
+        let decl: Node | undefined;
+        for (let s = scope; s && !decl; s = parentScope.get(s)) decl = bindings.get(s)?.get(name);
+        if (!decl) continue;
+        refers.set(use, decl);
+        edge("REFERS_TO", use, decl);
+        // An export specifier names the binding without reading it.
+        if (f.writeOnly.has(use) || op.type === "ExportSpecifier") continue;
+        edge("READS", op, decl, { access: idOf(use), access_signature: hashOf(use) });
+        edge("FLOWS_TO", decl, use);
+    }
+    // A target's binding: the declaration summarising it, or the one it refers to.
+    const binding = (t: Node) =>
+        declScope.has(t) ? bindings.get(declScope.get(t)!)!.get((t as Node & { name: string }).name) : refers.get(t);
+    for (const [op, t] of f.writes) {
+        const d = binding(t);
+        if (d) edge("WRITES", op, d, { access: idOf(t), access_signature: hashOf(t) });
+    }
+    for (const [a, b] of f.flows) edge("FLOWS_TO", a, b);
+    for (const [v, t] of f.stores) {
+        const d = binding(t);
+        if (d) edge("FLOWS_TO", v, d);
     }
     return { rootId: idOf(ast), nodes, scopes, rels };
 }
@@ -359,8 +489,11 @@ export class TaintGraph {
         const sources = await this.query(`MATCH (s:${SOURCE}) RETURN s.file AS file, s.code AS code`);
         const out = await TaintGraph.open(dbPath);
         try {
+            // One COPY per (rel, from, to) pair; checkpointing after each made save() ~4x slower.
+            await out.query("CALL auto_checkpoint=false");
             for (const s of sources) await out.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, s);
             await out.load(nodes, scopes, rels);
+            await out.query("CHECKPOINT");
         } finally {
             await out.close();
         }

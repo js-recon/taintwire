@@ -5,7 +5,7 @@ title: DECLARES
 
 # DECLARES
 
-`DECLARES` is the first semantic edge on top of the AST. It links a node to each `Identifier` it introduces as a JavaScript binding. It's the base that `REFERS_TO` and data flow will build on. See the [roadmap](roadmap.md).
+`DECLARES` is the first semantic edge on top of the AST. It links a node to each `Identifier` it introduces as a JavaScript binding. It's the base that [`REFERS_TO`](references.md) and [value flow](value-flow.md) build on.
 
 ## Where edges come from
 
@@ -44,10 +44,10 @@ This recursively collects the identifiers a binding pattern binds:
 
 ## Choices and their reasons
 
-- **The declarator, not the declaration.** `const a = 1, b = 2` has one `VariableDeclaration` and two `VariableDeclarator`s. The declarator owns both the name and its initializer (`init`), so it's the node data flow will start from.
+- **The declarator, not the declaration.** `const a = 1, b = 2` has one `VariableDeclaration` and two `VariableDeclarator`s. The declarator owns both the name and its initializer (`init`), so it's the node that `WRITES` the binding and that its `init` flows through. See [References](references.md#reads-and-writes).
 - **Method keys aren't bindings.** `{ method(a) {} }` binds `a` but not `method`. The key is a property name. A test checks that no `SON {key: 'key'}` target is ever a `DECLARES` target.
 - **Wrappers declare nothing.** `ExportNamedDeclaration`, `ExportDefaultDeclaration` and `VariableDeclaration` only wrap the real declarer. `export { x }` and re-exports (`export { y } from`, `export *`) refer to bindings rather than creating them.
-- **Assignments aren't declarations.** `({ a } = o)` writes to an existing binding. That will be a reference edge, not `DECLARES`.
+- **Assignments aren't declarations.** `({ a } = o)` writes to an existing binding. That's a `REFERS_TO` plus a `WRITES`, not `DECLARES`.
 - **Scope is a separate edge.** A `FunctionDeclaration` declares its own name and its params, even though the name binds in the enclosing scope and the params bind inside the function. `DECLARES` only answers "who introduces this name". `IN_SCOPE` answers "where does it live", and it's emitted from the same `declared()` call. See [Scopes](scopes.md).
 
 ## Coverage

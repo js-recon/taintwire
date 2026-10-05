@@ -1,5 +1,5 @@
 ---
-sidebar_position: 7
+sidebar_position: 9
 title: Storage
 ---
 
@@ -19,6 +19,10 @@ taintwire stores graphs in [LadybugDB](https://ladybugdb.com/) 0.21.2 through `@
 | `CREATES_SCOPE()` | edge, one pair per owner type (`FunctionDeclaration -> Scope`, ...) | Same as `SON` |
 | `PARENT_SCOPE()` | edge, `Scope -> Scope` | Same as `SON` |
 | `IN_SCOPE()` | edge, `Identifier -> Scope` | Same as `SON` |
+| `REFERS_TO()` | edge, `Identifier -> Identifier` | Same as `SON` |
+| `READS(access STRING, access_signature STRING)` | edge, many FROM/TO pairs (operation type `-> Identifier`) | Same as `SON` |
+| `WRITES(access STRING, access_signature STRING)` | edge, many FROM/TO pairs | Same as `SON` |
+| `FLOWS_TO()` | edge, many FROM/TO pairs (any expression type to any other) | Same as `SON` |
 
 ### Why a table per node type
 
@@ -102,6 +106,8 @@ Ladybug's `EXPORT DATABASE` rejects edge tables with several FROM/TO pairs, whic
 4. Open a new graph at `dbPath`, insert the `Source` rows, and run the same `load()` as `add()`.
 
 This reuses the loading path instead of adding a second serializer. The whole graph is held in memory during the copy.
+
+Before loading, `save()` turns off Ladybug's automatic checkpointing (`CALL auto_checkpoint=false`), and it runs one `CHECKPOINT` at the end. The copy is one `COPY` per node table and per (edge, from, to) pair, which is several hundred statements for a typical graph, mostly from `SON` and `FLOWS_TO`. With a checkpoint after each one, a save of the three test fixtures took about 20s. Without them it takes about 4.5s.
 
 ## Consistency
 

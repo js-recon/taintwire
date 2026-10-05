@@ -1,5 +1,5 @@
 ---
-sidebar_position: 8
+sidebar_position: 10
 title: Testing
 ---
 
@@ -39,6 +39,16 @@ A table of 36 snippet and expected-edge pairs, plus invariants over the fixtures
 ### `src/scopes.test.ts`: scopes
 
 A table of 29 snippets, each mapping every bound name to its scope chain, plus provenance, idempotency, parser-parity and persistence tests. See [Scopes: Coverage](scopes.md#coverage).
+
+### `src/flow.test.ts`: `REFERS_TO`, `READS`, `WRITES`, `FLOWS_TO`
+
+There's one snippet per semantic case: the spec's numbered cases 1-21 plus 14 more. The `edges()` helper renders a case's edges as readable strings, labelling `Identifier`s as `x`, or `x:decl` for a `DECLARES` target, and other nodes as `Type(code)`. So each expectation reads like the code:
+
+```ts
+expect(await edges("readWrite", "FLOWS_TO")).toEqual(["x:decl -> x", "x -> BinaryExpression(x + 1)", ...]);
+```
+
+`flows()` checks reachability with an `ACYCLIC` variable-length path. Test 21 checks over the fixtures for duplicates, self-edges and `access` provenance, and checks that re-import and `babel` parity give identical edges. See [References: Coverage](references.md#coverage) and [Value flow: Coverage](value-flow.md#coverage).
 
 ## CI
 

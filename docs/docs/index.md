@@ -23,7 +23,16 @@ await graph.close();
 
 :::caution Research stage
 
-taintwire is pre-1.0 and not yet on npm. The API and graph schema will change before it replaces the [JS Recon](https://github.com/js-recon/js-recon) taint engine. Only AST containment (`SON`), binding declarations (`DECLARES`) and lexical scopes (`Scope`, `CREATES_SCOPE`, `PARENT_SCOPE`, `IN_SCOPE`) are in the graph so far. References, data flow and a call graph aren't yet. See the [roadmap](implementation/roadmap.md).
+taintwire is pre-1.0 and not yet on npm. The API and graph schema will change before it replaces the [JS Recon](https://github.com/js-recon/js-recon) taint engine. So far, the graph has:
+
+- AST containment (`SON`)
+- binding declarations (`DECLARES`)
+- lexical scopes (`Scope`, `CREATES_SCOPE`, `PARENT_SCOPE`, `IN_SCOPE`)
+- name resolution (`REFERS_TO`)
+- access classification (`READS`, `WRITES`)
+- intra-procedural value flow (`FLOWS_TO`)
+
+The call graph, interprocedural and property flow, and taint rules aren't in yet. See the [roadmap](implementation/roadmap.md).
 
 :::
 

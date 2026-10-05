@@ -17,6 +17,7 @@ Everything below is exported from `@js-recon/taintwire`. TypeScript declarations
 | [`flatten()`](#flatten) | function | Low level: AST to node rows, scope rows and edges, without a database |
 | [`declared()`](#declared) | function | Low level: the identifiers a single AST node declares |
 | [`scopeKind()`](#scopekind) | function | Low level: the kind of scope a single AST node creates |
+| [`isRef()`](#isref) | function | Low level: whether an `Identifier` child is a lexical name lookup |
 | [`ScopeKind`](#scopekind) | type | `"global" \| "module" \| "function" \| "block" \| "catch" \| "class" \| "static_block"` |
 
 ## `import()`
@@ -152,11 +153,14 @@ function flatten(ast: Node, file: string): {
     rootId: string;
     nodes: Map<string, Row[]>;
     scopes: ScopeRow[];
-    rels: Record<"SON" | "DECLARES" | "CREATES_SCOPE" | "PARENT_SCOPE" | "IN_SCOPE", Map<string, Edge[]>>;
+    rels: Record<
+        "SON" | "DECLARES" | "CREATES_SCOPE" | "PARENT_SCOPE" | "IN_SCOPE" | "REFERS_TO" | "READS" | "WRITES" | "FLOWS_TO",
+        Map<string, Edge[]>
+    >;
 };
 ```
 
-Turns a Babel AST into the rows `add()` loads, with no database involved: node rows grouped by node type, `Scope` rows, and edges grouped by `"<fromType>\0<toType>"`. Scope edges use `"Scope"` as the type on their scope end. Exported for testing and research, and likely to change.
+Turns a Babel AST into the rows `add()` loads, with no database involved: node rows grouped by node type, `Scope` rows, and edges grouped by `"<fromType>\0<toType>"`. Scope edges use `"Scope"` as the type on their scope end. `REFERS_TO`, `READS`, `WRITES` and `FLOWS_TO` are resolved within this one file, after the walk. Exported for testing and research, and likely to change.
 
 ## `declared()`
 
@@ -174,6 +178,14 @@ function scopeKind(node: Node, parent?: Node): ScopeKind | null;
 ```
 
 Returns the kind of `Scope` that `node` creates, or `null` if it creates none. `parent` is the node's AST parent. It's needed for `BlockStatement`, which creates no scope when it's a function or catch body. See [Graph model](graph-model.md#the-scope-table) for the table of owners.
+
+## `isRef()`
+
+```ts
+function isRef(parent: Node, key: string): boolean;
+```
+
+Whether the `Identifier` at `parent[key]` is a lexical name lookup, and so a candidate for `REFERS_TO`. It's `false` for static property names and keys, labels, import/export names, private names and TypeScript type positions. It doesn't know about declarations: `flatten()` also skips `DECLARES` targets and re-exported names. See [References: What counts as a reference](../implementation/references.md#what-counts-as-a-reference).
 
 ## Errors
 

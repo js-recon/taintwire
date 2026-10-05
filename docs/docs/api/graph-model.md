@@ -133,7 +133,7 @@ Nothing else declares. In particular:
 
 ### `IN_SCOPE`
 
-`(binding:Identifier)-[:IN_SCOPE]->(scope:Scope)` links each `DECLARES` target to the scope it lives in. There's exactly one `IN_SCOPE` per `DECLARES` edge, and no other `Identifier` has one: uses of a name such as the `x` in `f(x)` aren't resolved yet. No properties.
+`(binding:Identifier)-[:IN_SCOPE]->(scope:Scope)` links each `DECLARES` target to the scope it lives in. There's exactly one `IN_SCOPE` per `DECLARES` edge, and no other `Identifier` has one. Uses of a name, such as the `x` in `f(x)`, are linked to their declaration by [`REFERS_TO`](#refers_to) instead. No properties.
 
 | Binding | Lives in |
 | --- | --- |
@@ -154,6 +154,54 @@ Identifier a     -[:IN_SCOPE]-> Scope {kind: function}
 Identifier v     -[:IN_SCOPE]-> Scope {kind: function}   (var skips the block)
 Identifier l     -[:IN_SCOPE]-> Scope {kind: block}      (BlockStatement, PARENT_SCOPE -> the function scope)
 ```
+
+### `REFERS_TO`
+
+`(use:Identifier)-[:REFERS_TO]->(decl:Identifier)` resolves a use of a name to the declaration it means: the `DECLARES` target in the nearest enclosing scope that binds that name. No properties.
+
+- Only lexical name lookups get one. Static property names (`obj.foo`), object and class keys, labels, import/export names, private names and TypeScript type names don't. Computed keys (`obj[key]`) do.
+- A declaration never refers to itself.
+- A name with no declaration in the file, such as `console`, `location` or `window`, gets no edge. No placeholder declarations are created.
+- When one scope declares a name twice (`var x; var x;`, or a param redeclared with `var`), everything targets the first declaration.
+
+### `READS` and `WRITES`
+
+`(operation)-[:READS {access, access_signature}]->(decl:Identifier)` means the operation consumes the binding's current value. `(operation)-[:WRITES {access, access_signature}]->(decl:Identifier)` means it initializes or updates the binding. Both always point at the declaration.
+
+| Property | Type | Contents |
+| --- | --- | --- |
+| `access` | `STRING` | The `id` of the exact `Identifier` occurrence that did the access. |
+| `access_signature` | `STRING` | That occurrence's `hash`. `null` with the `babel` parser. Hashes are content-only, so this is the same for every `x`. Use `access` to find the occurrence. |
+
+| Code | Edges |
+| --- | --- |
+| `const y = x` | `VariableDeclarator` READS `x`, WRITES `y` |
+| `x = y` | `AssignmentExpression` READS `y`, WRITES `x` |
+| `x += y`, `x \|\|= y`, ... | `AssignmentExpression` READS and WRITES `x`, READS `y` |
+| `x++` | `UpdateExpression` READS and WRITES `x` |
+| `x + 1`, `f(x)`, `obj.p`, `return x`, `if (x)` | the direct parent (`BinaryExpression`, `CallExpression`, `MemberExpression`, ...) READS |
+| `obj.p = v` | READS `obj` and `v`. No WRITES: a property changes, not the binding. |
+| `[a, b] = v`, `for (x of xs)` | WRITES each target, READS `v` / `xs` |
+| `let x;` | nothing: no initializer |
+
+See [References, reads and writes](../implementation/references.md) for every rule.
+
+### `FLOWS_TO`
+
+`(a)-[:FLOWS_TO]->(b)` means the value of `a` may contribute to the value of `b`. It's intra-procedural data flow, and both ends are AST nodes. No properties.
+
+```text
+const z = x + y;
+
+Identifier x (decl) ─> Identifier x (use) ─> BinaryExpression ─> Identifier z (decl)
+Identifier y (decl) ─> Identifier y (use) ─┘
+```
+
+- A variable's declaration `Identifier` is the summary for its value: every write flows into it, and it flows out to every read. This is flow-insensitive, so order isn't tracked and cycles are normal (`x = x + 1`).
+- Values flow through binary, logical, unary (not `void` or `delete`), conditional (branches only), template, sequence (last only), assignment and update expressions, and into `ReturnStatement`.
+- No flow through calls, member access, destructuring, iteration or object and array literals yet.
+
+See [Value flow](../implementation/value-flow.md).
 
 ## `props`
 
