@@ -5,8 +5,8 @@ const config: Config = {
     title: "taintwire",
     tagline: "Graph-based AST and taint analysis for JavaScript",
 
-    url: "https://js-recon.github.io",
-    baseUrl: "/taintwire/",
+    url: "https://taintwire.js-recon.io",
+    baseUrl: "/",
 
     onBrokenLinks: "throw",
     markdown: {
