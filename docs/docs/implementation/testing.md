@@ -70,6 +70,10 @@ The spec cases already cover the rest, and the file says which test covers which
 
 One snippet per call-resolution rule, both resolved and deliberately unresolved, then argument mapping, return ownership, interprocedural reachability (including recursion), the two end-to-end demos, determinism, `babel` parity, persistence and consistency invariants. It uses the shared `edgeList()` and `reaches()` helpers from `src/test-utils.ts`, which the build excludes. See [Calls: Coverage](calls.md#coverage).
 
+## Real bundles
+
+Built bundles from the private js-recon-research corpus, covering webpack, React (webpack and Vite), Vue, Nuxt, SvelteKit, Angular and plain Node, are run through taintwire outside this repo. That run also makes targeted assertions on known code in them: a `postMessage` handler reaching `eval` across a call, the webpack require resolving while its module factories don't, and so on. The setup, per-bundle numbers, unresolved-call breakdown and performance measurements are in `OVERNIGHT_REPORT.md` at the repo root.
+
 ## CI
 
 `.github/workflows/test.yml` runs `npm ci`, `npm run build` and `npm test` on every push to `main` and every pull request. The matrix is `ubuntu-latest` and `macos-latest`, with Node 22 and 24, and `fail-fast: false`. `@ladybugdb/core` ships native binaries, so testing both operating systems matters.
