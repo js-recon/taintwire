@@ -149,10 +149,11 @@ All of it is in `flatten()`, after the [resolution post-pass](references.md#reso
 
 1. During the walk, the scope context carries `fn`, the nearest enclosing function, so each `ReturnStatement` is filed under its owner. Calls are collected, and `facts()` records each write's value (`defs`) alongside the existing `WRITES`.
 2. Each binding's definitions are gathered from those writes and from its declarations.
-3. `callables(value)` returns the set of functions a value may be, or `null` for unknown. It follows aliases through `REFERS_TO`, the branches of `?:` and `||`, the last expression of a sequence, `=` assignments and TS wrappers. A `seen` set stops alias cycles.
-4. For each call with a non-empty result: `CALLS`, then `ARGUMENT_TO` by position, then `RETURNS_TO` unless the callee is async or a generator.
+3. `leaves(value)` reads one value with an explicit stack. It records the functions the value is directly, whether any part is unknown, and the bindings it aliases (through `REFERS_TO`, the branches of `?:` and `||`, the last expression of a sequence, `=` assignments and TS wrappers).
+4. Each binding's functions are solved once over that alias graph with an iterative Tarjan SCC pass. Bindings on an alias cycle (`f = g; g = f`) share one result. A binding's result includes everything it aliases, and is unknown if anything reachable is unknown.
+5. For each call with a non-empty result: `CALLS`, then `ARGUMENT_TO` by position, then `RETURNS_TO` unless the callee is async or a generator.
 
-The alias walk runs per callsite. Chains are short in practice. A `ponytail:` comment marks memoising it as the fix if they ever aren't.
+The first version walked alias chains recursively, once per callsite. That was quadratic, and a few thousand chained aliases overflowed the JS stack and crashed the import. The SCC pass is linear: 16,000 chained aliases, each called, now take about 0.5 s instead of 33 s. A regression test runs a 20,000-link chain in both directions.
 
 ## Coverage
 

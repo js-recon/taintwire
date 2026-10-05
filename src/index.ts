@@ -464,38 +464,118 @@ export function flatten(ast: Node, file: string) {
         def(binding(t), isFunction(by) && t === (by as { id?: Node | null }).id ? by : null);
     }
     // The functions a value may be, or null if any part of it is unknown. Flow-insensitive like FLOWS_TO: every
-    // definition of a binding counts, in any order. ponytail: walks alias chains per callsite; memoise if they get long.
-    const union = (...cs: (Set<Node> | null)[]) => (cs.some((c) => !c) ? null : new Set(cs.flatMap((c) => [...c!])));
-    const callables = (v: Node | null | undefined, seen: Set<Node>): Set<Node> | null => {
-        switch (v?.type) {
-            case "FunctionDeclaration":
-            case "FunctionExpression":
-            case "ArrowFunctionExpression":
-                return new Set([v]);
-            case "Identifier": {
-                const d = refers.get(v);
-                if (!d) return null;
-                if (seen.has(d)) return new Set(); // a cycle adds no new values
-                seen.add(d);
-                return union(...(defs.get(d) ?? []).map((x) => callables(x, seen)));
+    // definition of a binding counts, in any order. `leaves()` reads one value: the functions it is directly, whether
+    // any part is unknown, and the bindings it aliases. Explicit stacks throughout: alias chains in bundles can be long.
+    type Leaves = { fns: Set<Node>; unknown: boolean; deps: Node[] };
+    const leaves = (roots: (Node | null | undefined)[]): Leaves => {
+        const out: Leaves = { fns: new Set(), unknown: false, deps: [] };
+        const st = [...roots];
+        while (st.length) {
+            const v = st.pop();
+            switch (v?.type) {
+                case "FunctionDeclaration":
+                case "FunctionExpression":
+                case "ArrowFunctionExpression":
+                    out.fns.add(v);
+                    break;
+                case "Identifier": {
+                    const d = refers.get(v);
+                    if (d) out.deps.push(d);
+                    else out.unknown = true;
+                    break;
+                }
+                case "SequenceExpression":
+                    st.push(v.expressions.at(-1));
+                    break;
+                case "AssignmentExpression":
+                    if (v.operator === "=") st.push(v.right);
+                    else out.unknown = true;
+                    break;
+                case "ConditionalExpression":
+                    st.push(v.consequent, v.alternate);
+                    break;
+                case "LogicalExpression":
+                    st.push(v.left, v.right);
+                    break;
+                default:
+                    if (v && TS_VALUES.has(v.type)) st.push((v as Node & { expression: Node }).expression);
+                    else out.unknown = true;
             }
-            case "SequenceExpression":
-                return callables(v.expressions.at(-1), seen);
-            case "AssignmentExpression":
-                return v.operator === "=" ? callables(v.right, seen) : null;
-            case "ConditionalExpression":
-                return union(callables(v.consequent, seen), callables(v.alternate, seen));
-            case "LogicalExpression":
-                return union(callables(v.left, seen), callables(v.right, seen));
-            default:
-                return v && TS_VALUES.has(v.type) ? callables((v as Node & { expression: Node }).expression, seen) : null;
         }
+        return out;
+    };
+    // Each binding's functions over the alias graph, solved once with an iterative Tarjan: the bindings on an alias
+    // cycle (`f = g; g = f`) share one result, and a binding's result includes every binding it aliases. Linear overall.
+    const info = new Map<Node, Leaves>();
+    const leafOf = (d: Node) => info.get(d) ?? info.set(d, leaves(defs.get(d) ?? [])).get(d)!;
+    const solved = new Map<Node, Set<Node> | null>();
+    const index = new Map<Node, number>();
+    const low = new Map<Node, number>();
+    const sccStack: Node[] = [];
+    const onStack = new Set<Node>();
+    const solve = (root: Node) => {
+        if (index.has(root)) return;
+        const work: [Node, number][] = [[root, 0]];
+        while (work.length) {
+            const top = work[work.length - 1];
+            const d = top[0];
+            if (!index.has(d)) {
+                index.set(d, index.size);
+                low.set(d, index.get(d)!);
+                sccStack.push(d);
+                onStack.add(d);
+            }
+            const deps = leafOf(d).deps;
+            if (top[1] < deps.length) {
+                const w = deps[top[1]++];
+                if (!index.has(w)) work.push([w, 0]);
+                else if (onStack.has(w)) low.set(d, Math.min(low.get(d)!, index.get(w)!));
+                continue;
+            }
+            work.pop();
+            if (work.length) {
+                const p = work[work.length - 1][0];
+                low.set(p, Math.min(low.get(p)!, low.get(d)!));
+            }
+            if (low.get(d) !== index.get(d)) continue;
+            const members = new Set<Node>();
+            for (let w: Node | undefined; w !== d; ) {
+                w = sccStack.pop()!;
+                onStack.delete(w);
+                members.add(w);
+            }
+            let r: Set<Node> | null = new Set();
+            for (const m of members) {
+                const l = leafOf(m);
+                if (l.unknown) r = null;
+                l.fns.forEach((fn) => r?.add(fn));
+                for (const x of l.deps) {
+                    if (members.has(x)) continue;
+                    const rx = solved.get(x)!; // another SCC, already solved
+                    if (rx === null) r = null;
+                    rx?.forEach((fn) => r?.add(fn));
+                }
+            }
+            for (const m of members) solved.set(m, r);
+        }
+    };
+    const callables = (v: Node): Set<Node> | null => {
+        const l = leaves([v]);
+        if (l.unknown) return null;
+        const r = new Set(l.fns);
+        for (const d of l.deps) {
+            solve(d);
+            const rd = solved.get(d);
+            if (rd === null) return null;
+            rd?.forEach((fn) => r.add(fn));
+        }
+        return r;
     };
     // The binding a formal parameter declares, if it's a plain name (destructured params need element/property flow).
     const paramName = (p: Node): Node | undefined =>
         p.type === "Identifier" ? p : p.type === "AssignmentPattern" ? paramName(p.left) : p.type === "TSParameterProperty" ? paramName(p.parameter) : p.type === "RestElement" ? paramName(p.argument) : undefined;
     for (const c of calls as (Node & { callee: Node; arguments: Node[] })[]) {
-        const targets = callables(c.callee, new Set());
+        const targets = callables(c.callee);
         if (!targets?.size) continue; // unresolved: a global, a param, a member, a call result, ...
         for (const fn of targets as Set<Node & { params: Node[]; body: Node; async?: boolean; generator?: boolean }>) {
             edge("CALLS", c, fn, { candidates: targets.size });

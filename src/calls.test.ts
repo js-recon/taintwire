@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import * as taintwire from "./index.js";
 import { edgeList, reaches } from "./test-utils.js";
+import { cs_mast_init } from "@shriyanss/cs-mast";
+import type { Node } from "@babel/types";
+
+const cs = (code: string) => cs_mast_init(code, taintwire.CS_MAST_CONFIG).root._raw as Node;
 
 const CALL_RELS = ["CALLS", "ARGUMENT_TO", "RETURNS_TO"] as const;
 
@@ -278,6 +282,24 @@ test("demo: x.trim() is a member call, so the path stops at x (no fake member-ca
     expect(await flows("demoTrim", "location.search", "x")).toBe(true); // through q and the argument
     expect(await flows("demoTrim", "location.search", "cleanish")).toBe(false);
     // with a resolvable function the same sink is reached: see demoEval
+});
+
+test("regression: alias cycles share their definitions", async () => {
+    // f and g alias each other, and between them only ever hold foo
+    const h = await taintwire.import("function foo() {}\nlet f = foo;\nlet g = f;\nf = g;\ng();\nf();", { filename: "cyc.js" });
+    const rows = await h.query("MATCH (c:CallExpression)-[e:CALLS]->(fn:FunctionDeclaration) RETURN count(c) AS n, min(e.candidates) AS k");
+    expect(rows).toEqual([{ n: 2, k: 1 }]);
+    await h.close();
+});
+
+test("regression: a 20,000-link alias chain resolves without recursion (was a stack overflow, and quadratic)", async () => {
+    const n = 20000;
+    const forward = "const a0 = function (x) { return x; };\n" + Array.from({ length: n }, (_, i) => `const a${i + 1} = a${i};\na${i + 1}(1);`).join("\n");
+    const reversed = Array.from({ length: n }, (_, i) => `const a${i} = a${i + 1};\na${i}(1);`).join("\n") + `\nconst a${n} = (x) => x;`;
+    for (const code of [forward, reversed]) {
+        const { rels } = taintwire.flatten(cs(code), "chain.js");
+        expect([...rels.CALLS.values()].reduce((a, e) => a + e.length, 0)).toBe(n);
+    }
 });
 
 test("no duplicate call edges; save() and reopen keep them; babel builds the same", async () => {
