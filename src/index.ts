@@ -90,6 +90,8 @@ const RELS = {
     RETURNS_TO: [],
 } as const;
 type Rel = keyof typeof RELS;
+/** Every relationship (edge table) a graph has, in layer order: AST, declarations, scopes, resolution, access, flow, calls. */
+export const RELATIONS = Object.keys(RELS) as Rel[];
 // Ladybug rel tables need at least one FROM/TO pair. open() creates every rel table up front with one real pair
 // (and that pair's node tables), so `MATCH ()-[:REFERS_TO]->()` on a graph with none is empty rather than a binder error.
 const DEFAULT_PAIRS: Record<Rel, [string, string]> = {

@@ -17,6 +17,7 @@ Everything below is exported from `@js-recon/taintwire`. TypeScript declarations
 | [`flatten()`](#flatten) | function | Low level: AST to node rows, scope rows and edges, without a database |
 | [`declared()`](#declared) | function | Low level: the identifiers a single AST node declares |
 | [`scopeKind()`](#scopekind) | function | Low level: the kind of scope a single AST node creates |
+| [`RELATIONS`](#relations) | const | The names of every edge table, in layer order |
 | [`isRef()`](#isref) | function | Low level: whether an `Identifier` child is a lexical name lookup |
 | [`ScopeKind`](#scopekind) | type | `"global" \| "module" \| "function" \| "block" \| "catch" \| "class" \| "static_block"` |
 
@@ -180,6 +181,14 @@ function scopeKind(node: Node, parent?: Node): ScopeKind | null;
 ```
 
 Returns the kind of `Scope` that `node` creates, or `null` if it creates none. `parent` is the node's AST parent. It's needed for `BlockStatement`, which creates no scope when it's a function or catch body. See [Graph model](graph-model.md#the-scope-table) for the table of owners.
+
+## `RELATIONS`
+
+```ts
+const RELATIONS: readonly ["SON", "DECLARES", "CREATES_SCOPE", "PARENT_SCOPE", "IN_SCOPE", "REFERS_TO", "READS", "WRITES", "FLOWS_TO", "CALLS", "ARGUMENT_TO", "RETURNS_TO"];
+```
+
+The edge tables every graph has, from the moment it's opened. Querying any of them on a graph with no such edges returns no rows. The names are stable. See [Graph model](graph-model.md#edges).
 
 ## `isRef()`
 

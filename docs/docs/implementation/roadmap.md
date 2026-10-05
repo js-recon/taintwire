@@ -47,3 +47,5 @@ Each new edge type is a `RELS` entry plus the emitting code in `flatten()` (or a
 | Per-file resolution | Globals shared between script files, and host objects, stay unresolved | Model the global object and host APIs |
 | Context-insensitive calls | Every callsite of a function shares its param and return summaries, so `id(s1)` and `id(s2)` mix | Call strings or cloning ([Calls](calls.md#context-insensitivity)) |
 | All-or-nothing call resolution | One unknown definition (a param, an import, a member value) leaves a call unresolved | Property and module recovery, then higher-order flow |
+| Load cost per statement | Import time is dominated by Ladybug, not analysis: about 500 `COPY`/DDL statements for a 178 KB bundle (react-dom: parse 0.6 s, flatten with all semantics 0.24 s, load 5.4 s) | Fewer edge-table pairs, or batching pairs per statement if Ladybug allows it |
+| Large saved files | A saved graph is at least about 6.7 MB, and roughly 750 bytes per edge (react-dom: 141K edges, 135 MB) | Look at Ladybug page allocation per table and pair, and compression |
