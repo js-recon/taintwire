@@ -35,6 +35,7 @@ Both produce the same tree.
 
 - Every Babel node becomes a graph node **labelled by its AST type** (`File`, `Program`, `CallExpression`, ...), id `<type>_<random hex>`.
 - Parent → child edges are `SON {key, idx}`: `key` is the Babel field (`callee`, `arguments`, `body`, ...), `idx` the array index or `-1`.
+- `A -[:DECLARES]-> B`: AST node `A` introduces the `Identifier` node `B` as a binding. `B` is the existing AST node (same id and hash), not a copy. Producers: `VariableDeclarator` (var/let/const/using/await using), `FunctionDeclaration`/`FunctionExpression` (name + params), `ArrowFunctionExpression`/`ObjectMethod`/`ClassMethod`/`ClassPrivateMethod` (params only), `ClassDeclaration`/`ClassExpression` (name), import specifiers (local name) and `CatchClause`. Destructuring yields the bound names, not the object keys or default values. Wrappers like `VariableDeclaration` or `Export*Declaration`, and patterns themselves, declare nothing.
 - Node columns: `id, type, file, startOffset, endOffset, line, col, endLine, endCol, name, value, operator, props, hash`.
   - `name` (identifiers), `value` (literals, stringified; template `cooked`), `operator` are pulled out for querying.
   - `props` is a JSON string of the remaining fields; child-node fields are replaced with `{type, slug_ref}` pointing at the child's id.

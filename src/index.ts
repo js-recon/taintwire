@@ -71,8 +71,13 @@ const COLUMNS = {
 // Node fields that are either columns already or noise for the graph.
 const SKIP_PROPS = new Set(["type", "start", "end", "loc", "range", "leadingComments", "trailingComments", "innerComments", "comments", "errors", "tokens", CS_MAST_SIGNATURE_KEY]);
 
+// Rel tables and their property columns. SON is AST containment; DECLARES is the first semantic edge.
+const RELS = { SON: ["key STRING", "idx INT64"], DECLARES: [] } as const;
+type Rel = keyof typeof RELS;
+
 type Row = Record<keyof typeof COLUMNS, string | number | null>;
-type Edge = { from: string; to: string; key: string; idx: number };
+type Edge = { from: string; to: string; key?: string; idx?: number };
+type Edges = Map<string, Edge[]>; // key: `${fromType}\0${toType}`
 type Ref = { type: string; slug_ref: string };
 
 const scalar = (v: unknown): string | null => {
@@ -81,6 +86,53 @@ const scalar = (v: unknown): string | null => {
     if (v && typeof v === "object" && "raw" in v) return String((v as { cooked?: string; raw: string }).cooked ?? (v as { raw: string }).raw);
     return null;
 };
+
+// The Identifiers a binding pattern binds: pattern values (never object keys), defaults' left side only.
+function bindingIds(p: Node | null | undefined): Node[] {
+    switch (p?.type) {
+        case "Identifier":
+            return p.name === "this" ? [] : [p]; // TS `this` parameter isn't a binding
+        case "ObjectPattern":
+            return p.properties.flatMap((q) => bindingIds(q.type === "RestElement" ? q.argument : (q.value as Node)));
+        case "ArrayPattern":
+            return p.elements.flatMap(bindingIds);
+        case "AssignmentPattern":
+            return bindingIds(p.left);
+        case "RestElement":
+            return bindingIds(p.argument);
+        case "TSParameterProperty":
+            return bindingIds(p.parameter);
+        default:
+            return [];
+    }
+}
+
+/** Identifier nodes `node` introduces as JS bindings (its DECLARES targets). Wrappers, patterns and control flow declare nothing. */
+export function declared(node: Node): Node[] {
+    switch (node.type) {
+        case "VariableDeclarator": // var / let / const / using / await using
+            return bindingIds(node.id);
+        case "FunctionDeclaration":
+        case "FunctionExpression":
+            return [node.id, ...node.params].flatMap(bindingIds);
+        case "ArrowFunctionExpression":
+        case "ObjectMethod":
+        case "ClassMethod":
+        case "ClassPrivateMethod": // params only: the key is a property name, not a binding
+            return node.params.flatMap(bindingIds);
+        case "ClassDeclaration":
+        case "ClassExpression":
+            return bindingIds(node.id);
+        case "ImportSpecifier": // the local name, not the imported one
+        case "ImportDefaultSpecifier":
+        case "ImportNamespaceSpecifier":
+            return [node.local];
+        case "CatchClause":
+            return bindingIds(node.param);
+        default:
+            return [];
+    }
+}
 
 /** Flatten a Babel AST into per-type node rows and per-(parent,child)-type SON edges. */
 export function flatten(ast: Node, file: string) {
@@ -94,7 +146,12 @@ export function flatten(ast: Node, file: string) {
     const ref = (v: unknown): Ref | unknown => (isNode(v) ? { type: v.type, slug_ref: idOf(v) } : v);
 
     const nodes = new Map<string, Row[]>();
-    const edges = new Map<string, Edge[]>(); // key: `${parentType}\0${childType}`
+    const rels: Record<Rel, Edges> = { SON: new Map(), DECLARES: new Map() };
+    const push = (rel: Rel, from: Node, to: Node, e: Edge) => {
+        const pair = `${from.type}\0${to.type}`;
+        if (!rels[rel].has(pair)) rels[rel].set(pair, []);
+        rels[rel].get(pair)!.push(e);
+    };
 
     // Iterative walk: minified bundles nest deep enough to blow the JS stack.
     const stack: Node[] = [ast];
@@ -114,12 +171,12 @@ export function flatten(ast: Node, file: string) {
             props[k] = Array.isArray(v) ? v.map(ref) : ref(v);
             (Array.isArray(v) ? v : [v]).forEach((child, i) => {
                 if (!isNode(child)) return;
-                const pair = `${node.type}\0${child.type}`;
-                if (!edges.has(pair)) edges.set(pair, []);
-                edges.get(pair)!.push({ from: id, to: idOf(child), key: k, idx: Array.isArray(v) ? i : -1 });
+                push("SON", node, child, { from: id, to: idOf(child), key: k, idx: Array.isArray(v) ? i : -1 });
                 stack.push(child);
             });
         }
+        // Same idOf() as SON, so DECLARES targets are the existing Identifier nodes.
+        for (const t of declared(node)) push("DECLARES", node, t, { from: id, to: idOf(t) });
 
         const n = node as Node & { name?: unknown; value?: unknown; operator?: unknown; [CS_MAST_SIGNATURE_KEY]?: string };
         if (!nodes.has(node.type)) nodes.set(node.type, []);
@@ -141,7 +198,7 @@ export function flatten(ast: Node, file: string) {
             hash: n[CS_MAST_SIGNATURE_KEY]?.slice(n[CS_MAST_SIGNATURE_KEY].lastIndexOf("$") + 1) ?? null,
         });
     }
-    return { rootId: idOf(ast), nodes, edges };
+    return { rootId: idOf(ast), nodes, rels };
 }
 
 /** A LadybugDB-backed graph of one or more parsed JS files. */
@@ -150,7 +207,7 @@ export class TaintGraph {
         readonly db: lbug.Database,
         readonly connection: lbug.Connection,
         private readonly tables: Set<string>,
-        private readonly childPairs: Set<string>,
+        private readonly relPairs: Record<Rel, Set<string>>,
         private readonly parser: Parser
     ) {}
 
@@ -161,14 +218,14 @@ export class TaintGraph {
     static async open(dbPath = ":memory:", { parser = "cs-mast" }: { parser?: Parser } = {}): Promise<TaintGraph> {
         const db = new lbug.Database(dbPath, 0, true, false, MAX_DB_SIZE);
         const conn = new lbug.Connection(db);
-        const g = new TaintGraph(db, conn, new Set(), new Set(), parser);
+        const g = new TaintGraph(db, conn, new Set(), { SON: new Set(), DECLARES: new Set() }, parser);
         // Each file's source is stored once; node code is sliced from it by offset (see code()).
         await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SOURCE}(file STRING PRIMARY KEY, code STRING)`);
         for (const t of await g.query("CALL show_tables() RETURN name, type")) {
             if (t.type === "NODE" && t.name !== SOURCE) g.tables.add(t.name as string);
-            if (t.type === "REL" && t.name === "SON") {
-                for (const c of await g.query("CALL show_connection('SON') RETURN *"))
-                    g.childPairs.add(`${c["source table name"]}\0${c["destination table name"]}`);
+            if (t.type === "REL" && (t.name as string) in RELS) {
+                for (const c of await g.query(`CALL show_connection('${t.name}') RETURN *`))
+                    g.relPairs[t.name as Rel].add(`${c["source table name"]}\0${c["destination table name"]}`);
             }
         }
         return g;
@@ -176,10 +233,10 @@ export class TaintGraph {
 
     /** Parse `code` and load its AST into the graph. Returns the id of the File node. */
     async add(code: string, filename = "input.js"): Promise<string> {
-        const { rootId, nodes, edges } = flatten(parseAst(code, this.parser), filename);
+        const { rootId, nodes, rels } = flatten(parseAst(code, this.parser), filename);
         // Source first: a duplicate filename fails on the primary key before any nodes are loaded.
         await this.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, { file: filename, code });
-        await this.load(nodes, edges);
+        await this.load(nodes, rels);
         return rootId;
     }
 
@@ -206,19 +263,21 @@ export class TaintGraph {
     async save(dbPath: string): Promise<void> {
         if (existsSync(dbPath)) throw new Error(`taintwire: refusing to overwrite existing ${dbPath}`);
         const nodes = new Map<string, Row[]>();
-        const edges = new Map<string, Edge[]>();
+        const rels: Record<Rel, Edges> = { SON: new Map(), DECLARES: new Map() };
         const cols = Object.keys(COLUMNS).map((c) => `n.${c} AS ${c}`).join(", ");
         for (const type of this.tables) nodes.set(type, (await this.query(`MATCH (n:\`${type}\`) RETURN ${cols}`)) as Row[]);
-        for (const pair of this.childPairs) {
-            const [from, to] = pair.split("\0");
-            const q = `MATCH (a:\`${from}\`)-[e:SON]->(b:\`${to}\`) RETURN a.id AS from, b.id AS to, e.key AS key, e.idx AS idx`;
-            edges.set(pair, (await this.query(q)) as Edge[]);
-        }
+        for (const rel of Object.keys(RELS) as Rel[])
+            for (const pair of this.relPairs[rel]) {
+                const [from, to] = pair.split("\0");
+                const props = RELS[rel].map((p) => `, e.${p.split(" ")[0]} AS ${p.split(" ")[0]}`).join("");
+                const q = `MATCH (a:\`${from}\`)-[e:${rel}]->(b:\`${to}\`) RETURN a.id AS from, b.id AS to${props}`;
+                rels[rel].set(pair, (await this.query(q)) as Edge[]);
+            }
         const sources = await this.query(`MATCH (s:${SOURCE}) RETURN s.file AS file, s.code AS code`);
         const out = await TaintGraph.open(dbPath);
         try {
             for (const s of sources) await out.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, s);
-            await out.load(nodes, edges);
+            await out.load(nodes, rels);
         } finally {
             await out.close();
         }
@@ -238,20 +297,20 @@ export class TaintGraph {
     }
 
     // COPY is Ladybug's bulk path; UNWIND+MATCH+CREATE for edges was ~4x slower overall.
-    private async load(nodes: Map<string, Row[]>, edges: Map<string, Edge[]>) {
+    private async load(nodes: Map<string, Row[]>, rels: Record<Rel, Edges>) {
         const cols = Object.keys(COLUMNS).map((c) => `r.${c}`).join(", ");
         for (const [type, rows] of nodes) {
             await this.ensureNodeTable(type);
             if (rows.length) await this.batched(`COPY \`${type}\` FROM (UNWIND $rows AS r RETURN ${cols})`, rows);
         }
-        for (const [pair, rows] of edges) {
-            const [from, to] = pair.split("\0");
-            await this.ensureChildPair(from, to);
-            if (rows.length)
-                await this.batched(
-                    `COPY SON FROM (UNWIND $rows AS r RETURN r.from, r.to, r.key, r.idx) (from='${from}', to='${to}')`,
-                    rows
-                );
+        for (const rel of Object.keys(RELS) as Rel[]) {
+            const props = RELS[rel].map((p) => `, r.${p.split(" ")[0]}`).join("");
+            for (const [pair, rows] of rels[rel]) {
+                const [from, to] = pair.split("\0");
+                await this.ensureRelPair(rel, from, to);
+                if (rows.length)
+                    await this.batched(`COPY ${rel} FROM (UNWIND $rows AS r RETURN r.from, r.to${props}) (from='${from}', to='${to}')`, rows);
+            }
         }
     }
 
@@ -268,15 +327,16 @@ export class TaintGraph {
         this.tables.add(type);
     }
 
-    private async ensureChildPair(from: string, to: string) {
+    private async ensureRelPair(rel: Rel, from: string, to: string) {
         const pair = `${from}\0${to}`;
-        if (this.childPairs.has(pair)) return;
+        const pairs = this.relPairs[rel];
+        if (pairs.has(pair)) return;
         await this.query(
-            this.childPairs.size
-                ? `ALTER TABLE SON ADD FROM \`${from}\` TO \`${to}\``
-                : `CREATE REL TABLE SON(FROM \`${from}\` TO \`${to}\`, key STRING, idx INT64)`
+            pairs.size
+                ? `ALTER TABLE ${rel} ADD FROM \`${from}\` TO \`${to}\``
+                : `CREATE REL TABLE ${rel}(${[`FROM \`${from}\` TO \`${to}\``, ...RELS[rel]].join(", ")})`
         );
-        this.childPairs.add(pair);
+        pairs.add(pair);
     }
 }
 
