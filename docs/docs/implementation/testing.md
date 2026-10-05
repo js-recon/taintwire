@@ -48,7 +48,23 @@ There's one snippet per semantic case: the spec's numbered cases 1-21 plus 14 mo
 expect(await edges("readWrite", "FLOWS_TO")).toEqual(["x:decl -> x", "x -> BinaryExpression(x + 1)", ...]);
 ```
 
-`flows()` checks reachability with an `ACYCLIC` variable-length path. Test 21 checks over the fixtures for duplicates, self-edges and `access` provenance, and checks that re-import and `babel` parity give identical edges. See [References: Coverage](references.md#coverage) and [Value flow: Coverage](value-flow.md#coverage).
+`flows()` checks reachability with an `ACYCLIC` variable-length path. Test 21 checks over the fixtures for duplicates, self-edges and `access` provenance, and checks that re-import and `babel` parity give identical edges.
+
+The `A1`-`A20` tests are an acceptance suite for the semantic layer. Each relation should mean exactly one thing, with no property, control or call semantics mixed in. They add:
+
+- static versus computed keys, with the property name declared so that a wrong resolution would show
+- `obj[key] = x` writing no binding
+- an initializer versus a bare `let x;`
+- a variable chain, and expression operators
+- compound and logical results flowing back into the target
+- destructuring and for-in/for-of with no flow, and with undeclared iterables having nothing to `READ`
+- shadowing across global, param, block and catch scopes, checked by `line:col`
+- sibling blocks
+- `access` versus `access_signature` (every `x` shares a hash)
+- reopening and re-adding a file never duplicating edges
+- global invariants: the `SON` tree intact, one `IN_SCOPE` per `DECLARES`, and no tables from later milestones
+
+The spec cases already cover the rest, and the file says which test covers which item. See [References: Coverage](references.md#coverage) and [Value flow: Coverage](value-flow.md#coverage).
 
 ## CI
 

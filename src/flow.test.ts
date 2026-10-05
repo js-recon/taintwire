@@ -44,6 +44,36 @@ const SRC: Record<string, string> = {
     defaultParam: "const d = 1;\nfunction f(p = d) {\n    return p;\n}",
     unary: "const x = 1;\nconst a = typeof x, b = !x, c = void x, d = -x;",
     hoisted: "f();\nfunction f() {}\nconsole.log(t);\nlet t = 1;",
+    // acceptance cases (A1-A20) not already covered above
+    hostGlobals: "console.log(location.search);",
+    staticVsComputed: "const obj = {}, key = 'k', foo = 1;\nobj.foo;\nobj[key];",
+    initFromUnresolved: "let x = y;",
+    computedPropertyWrite: "let obj, key, x;\nobj[key] = x;",
+    initialized: "const x = source;",
+    uninitialized: "let x;",
+    chain: "const a = source;\nconst b = a;\nconst c = b;",
+    expressions: "const a = 1, b = 2;\nconst c = a + b;\nconst x = a || b;\nconst y = !x;\nconst z = `hello ${y}`;",
+    destructureGlobals: "const { search } = location;\nconst [first] = values;",
+    destructureLocals: "const location = {}, values = [];\nconst { search } = location;\nconst [first] = values;",
+    forInOf: "const values = [], obj = {};\nfor (const x of values) {}\nfor (const key in obj) {}",
+    ugly: [
+        'const x = "global";',
+        "function outer(x) {",
+        "    x;",
+        "    {",
+        '        let x = "block";',
+        "        x;",
+        "        try {",
+        "            throw x;",
+        "        } catch (x) {",
+        "            return x;",
+        "        }",
+        "    }",
+        "}",
+        "x;",
+    ].join("\n"),
+    siblings: "{\n    const x = 1;\n    x;\n}\n{\n    const x = 2;\n    x;\n}",
+    occurrences: "let x = 1;\nx = x + x;",
 };
 const file = (name: string) => `${name}.${name === "types" ? "ts" : "js"}`;
 
@@ -374,6 +404,259 @@ test("unary operators carry their operand's value, except void", async () => {
 
 test("hoisted and TDZ uses still resolve (no control flow)", async () => {
     expect(await edges("hoisted", "REFERS_TO")).toEqual(["f -> f:decl", "t -> t:decl"]);
+});
+
+// Acceptance suite. Items already covered by the spec cases above aren't repeated:
+// A6 = 15, A7 = 5, A9 = 18, A10 = 19 (+ no RETURNS_TO in 9), A11 = 9, A14 = 13/14, A16 = the named-expression test.
+
+// Every REFERS_TO in a case as "line:col -> line:col" (use -> declaration), in source order.
+async function resolved(name: string) {
+    const rows = await g.query(
+        "MATCH (u:Identifier)-[:REFERS_TO]->(d:Identifier) WHERE u.file = $f RETURN u.line AS ul, u.col AS uc, d.line AS dl, d.col AS dc ORDER BY u.startOffset",
+        { f: file(name) }
+    );
+    return rows.map((r) => `${r.ul}:${r.uc} -> ${r.dl}:${r.dc}`);
+}
+
+test("A1: host globals stay unresolved; static property names never resolve, computed keys do", async () => {
+    expect(await edges("hostGlobals", "REFERS_TO")).toEqual([]);
+    const [d] = await g.query(
+        "MATCH ()-[:DECLARES]->(i:Identifier) WHERE i.file = 'hostGlobals.js' RETURN count(*) AS n"
+    );
+    expect(d.n).toBe(0);
+    // `foo` is declared, so resolving the property name `foo` would be visible here
+    expect(await edges("staticVsComputed", "REFERS_TO")).toEqual([
+        "key -> key:decl",
+        "obj -> obj:decl",
+        "obj -> obj:decl",
+    ]);
+});
+
+test("A2: let x = y reads y (only if resolvable) and writes x; obj[key] = x writes no binding", async () => {
+    expect(await all("initFromUnresolved")).toEqual({
+        REFERS_TO: [],
+        READS: [],
+        WRITES: ["VariableDeclarator(x = y) -> x:decl"],
+        FLOWS_TO: ["y -> x:decl"],
+    });
+    const e = await all("computedPropertyWrite");
+    expect(e.READS).toEqual([
+        "AssignmentExpression(obj[key] = x) -> x:decl",
+        "MemberExpression(obj[key]) -> key:decl",
+        "MemberExpression(obj[key]) -> obj:decl",
+    ]);
+    expect(e.WRITES).toEqual([]);
+});
+
+test("A3: an initializer is DECLARES + WRITES + flow; a bare declaration is DECLARES only", async () => {
+    expect(await edges("initialized", "DECLARES")).toEqual(["VariableDeclarator(x = source) -> x:decl"]);
+    expect(await all("initialized")).toEqual({
+        REFERS_TO: [],
+        READS: [],
+        WRITES: ["VariableDeclarator(x = source) -> x:decl"],
+        FLOWS_TO: ["source -> x:decl"],
+    });
+    expect(await edges("uninitialized", "DECLARES")).toEqual(["VariableDeclarator(x) -> x:decl"]);
+    expect(await all("uninitialized")).toEqual({ REFERS_TO: [], READS: [], WRITES: [], FLOWS_TO: [] });
+});
+
+test("A4: a value flows down a chain of variables", async () => {
+    expect(await edges("chain", "FLOWS_TO")).toEqual(
+        ["source -> a:decl", "a:decl -> a", "a -> b:decl", "b:decl -> b", "b -> c:decl"].sort()
+    );
+    expect(await flows("chain", "source", "c")).toBe(true);
+    expect(await flows("chain", "c", "source")).toBe(false);
+});
+
+test("A5: binary, logical, unary and template expressions carry their operands", async () => {
+    expect(await edges("expressions", "FLOWS_TO")).toEqual(
+        expect.arrayContaining([
+            "a -> BinaryExpression(a + b)",
+            "b -> BinaryExpression(a + b)",
+            "BinaryExpression(a + b) -> c:decl",
+            "a -> LogicalExpression(a || b)",
+            "b -> LogicalExpression(a || b)",
+            "LogicalExpression(a || b) -> x:decl",
+            "x -> UnaryExpression(!x)",
+            "UnaryExpression(!x) -> y:decl",
+            "y -> TemplateLiteral(`hello ${y}`)",
+            "TemplateLiteral(`hello ${y}`) -> z:decl",
+        ])
+    );
+    expect(await flows("expressions", "a", "z")).toBe(true);
+});
+
+test("A8: compound and logical assignment results flow back into the target", async () => {
+    for (const [name, ops] of [
+        ["compound", ["+="]],
+        ["logical", ["||=", "&&=", "??="]],
+    ] as const) {
+        const e = await all(name);
+        for (const op of ops) {
+            const A = `AssignmentExpression(x ${op} y)`;
+            expect(e.READS).toEqual(expect.arrayContaining([`${A} -> x:decl`, `${A} -> y:decl`]));
+            expect(e.WRITES).toContain(`${A} -> x:decl`);
+            expect(e.FLOWS_TO).toEqual(expect.arrayContaining([`x -> ${A}`, `y -> ${A}`, `${A} -> x:decl`]));
+        }
+    }
+});
+
+test("A12: destructuring declarations read and write, with no whole-object flow", async () => {
+    // `location` and `values` are undeclared here, so there's nothing to READ: READS targets declarations
+    expect(await all("destructureGlobals")).toEqual({
+        REFERS_TO: [],
+        READS: [],
+        WRITES: [
+            "VariableDeclarator([first] = values) -> first:decl",
+            "VariableDeclarator({ search } = location) -> search:decl",
+        ],
+        FLOWS_TO: [],
+    });
+    const e = await all("destructureLocals");
+    expect(e.READS).toEqual([
+        "VariableDeclarator([first] = values) -> values:decl",
+        "VariableDeclarator({ search } = location) -> location:decl",
+    ]);
+    expect(e.WRITES).toEqual(
+        expect.arrayContaining([
+            "VariableDeclarator({ search } = location) -> search:decl",
+            "VariableDeclarator([first] = values) -> first:decl",
+        ])
+    );
+    expect(await flows("destructureLocals", "location", "search")).toBe(false);
+    expect(await flows("destructureLocals", "values", "first")).toBe(false);
+});
+
+test("A13: for-of and for-in read the iterable and write the target, with no flow", async () => {
+    const e = await all("forInOf");
+    expect(e.READS).toEqual([
+        "ForInStatement(for (const key in obj) {}) -> obj:decl",
+        "ForOfStatement(for (const x of values) {}) -> values:decl",
+    ]);
+    expect(e.WRITES).toEqual(
+        expect.arrayContaining([
+            "ForOfStatement(for (const x of values) {}) -> x:decl",
+            "ForInStatement(for (const key in obj) {}) -> key:decl",
+        ])
+    );
+    expect(await flows("forInOf", "values", "x")).toBe(false);
+    expect(await flows("forInOf", "obj", "key")).toBe(false);
+});
+
+test("A15: shadowing across global, param, block and catch scopes", async () => {
+    expect(await resolved("ugly")).toEqual([
+        "3:4 -> 2:15", // x; in outer: the param
+        "6:8 -> 5:12", // x; in the block: let x = "block"
+        "8:18 -> 5:12", // throw x: still the block's x
+        "10:19 -> 9:17", // return x: the catch param
+        "14:0 -> 1:6", // x; at the top level: the global
+    ]);
+});
+
+test("A17: same-named bindings in sibling blocks don't see each other", async () => {
+    expect(await resolved("siblings")).toEqual(["3:4 -> 2:10", "7:4 -> 6:10"]);
+});
+
+test("A18: access is the exact occurrence; access_signature is its (content) hash", async () => {
+    const rows = await g.query(
+        "MATCH (op)-[r:READS|WRITES]->(d:Identifier), (u:Identifier) WHERE op.file = 'occurrences.js' AND u.id = r.access RETURN label(r) AS rel, op.type AS op, u.startOffset AS at, u.hash AS hash, r.access_signature AS sig ORDER BY at, rel"
+    );
+    const src = SRC.occurrences; // let x = 1;\nx = x + x;
+    const lhs = src.indexOf("x =", 5),
+        rhs1 = src.indexOf("x +"),
+        rhs2 = src.lastIndexOf("x");
+    expect(rows.map((r) => `${r.rel} ${r.op}@${r.at}`)).toEqual([
+        "WRITES VariableDeclarator@4",
+        `WRITES AssignmentExpression@${lhs}`,
+        `READS BinaryExpression@${rhs1}`,
+        `READS BinaryExpression@${rhs2}`,
+    ]);
+    for (const r of rows) expect(r.sig).toBe(r.hash);
+    // every x hashes the same: the signature alone can't tell the two reads in `x + x` apart, `access` can
+    expect(new Set(rows.map((r) => r.sig)).size).toBe(1);
+    // stable across a re-parse of the same source
+    const again = await taintwire.import(src, { filename: "occurrences.js" });
+    const sigs = async (graph: taintwire.TaintGraph) =>
+        (await graph.query("MATCH ()-[r:READS|WRITES]->() RETURN r.access_signature AS s ORDER BY s")).map((r) => r.s);
+    expect(await sigs(again)).toEqual(rows.map((r) => r.sig).sort());
+    await again.close();
+});
+
+test("A19: reopening, or re-adding a file, never re-runs or duplicates the analysis", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
+    const counts = async (graph: taintwire.TaintGraph) =>
+        graph.query(
+            "MATCH ()-[e:REFERS_TO|READS|WRITES|FLOWS_TO]->() RETURN label(e) AS rel, count(*) AS n ORDER BY rel"
+        );
+    try {
+        const path = join(dir, "g.lbug");
+        const first = await taintwire.import(SRC.ugly, { filename: "ugly.js", dbPath: path });
+        const before = await counts(first);
+        expect(before.length).toBe(4);
+        // the same file again is refused before anything is written
+        await expect(first.add(SRC.ugly, "ugly.js")).rejects.toThrow();
+        expect(await counts(first)).toEqual(before);
+        await first.close();
+        // reopening a persisted graph doesn't re-analyse it
+        const reopened = await taintwire.TaintGraph.open(path);
+        expect(await counts(reopened)).toEqual(before);
+        await reopened.close();
+        const again = await taintwire.TaintGraph.open(path);
+        expect(await counts(again)).toEqual(before);
+        await again.close();
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test("A20: global invariants over every case", async () => {
+    const zero = async (q: string) => expect((await g.query(q))[0].n, q).toBe(0);
+    // REFERS_TO runs from an Identifier use (never a declaration) to a declared Identifier
+    await zero(
+        "MATCH (u)-[:REFERS_TO]->(d) WHERE u.type <> 'Identifier' OR d.type <> 'Identifier' RETURN count(*) AS n"
+    );
+    await zero("MATCH ()-[:DECLARES]->(u)-[:REFERS_TO]->() RETURN count(*) AS n");
+    await zero("MATCH (u)-[:REFERS_TO]->(d) WHERE NOT EXISTS { MATCH ()-[:DECLARES]->(d) } RETURN count(*) AS n");
+    // READS/WRITES target declarations, and access names a real AST Identifier with that hash
+    await zero("MATCH ()-[:READS|WRITES]->(d) WHERE NOT EXISTS { MATCH ()-[:DECLARES]->(d) } RETURN count(*) AS n");
+    await zero(
+        "MATCH ()-[r:READS|WRITES]->() WHERE NOT EXISTS { MATCH (u:Identifier) WHERE u.id = r.access AND u.hash = r.access_signature } RETURN count(*) AS n"
+    );
+    // no static property name or key is a reference
+    await zero(
+        "MATCH (m)-[s:SON]->(i:Identifier)-[:REFERS_TO]->() WHERE s.key IN ['property', 'key'] AND NOT m.props CONTAINS '\"computed\":true' RETURN count(*) AS n"
+    );
+    await zero(
+        "MATCH ()-[s:SON]->(:Identifier)-[:REFERS_TO]->() WHERE s.key IN ['label', 'imported', 'exported'] RETURN count(*) AS n"
+    );
+    // semantic edges never touch Scope or Source
+    await zero(
+        "MATCH (a)-[:REFERS_TO|READS|WRITES|FLOWS_TO]->(b) WHERE a.type IS NULL OR b.type IS NULL RETURN count(*) AS n"
+    );
+    // the structural layer is intact: one parent per AST node except File, one IN_SCOPE per DECLARES
+    await zero(
+        "MATCH (n) WHERE n.type IS NOT NULL AND n.type <> 'File' AND NOT EXISTS { MATCH ()-[:SON]->(n) } RETURN count(*) AS n"
+    );
+    const [multi] = await g.query("MATCH (p)-[:SON]->(n) WITH n, count(p) AS k WHERE k > 1 RETURN count(*) AS n");
+    expect(multi.n).toBe(0);
+    const [c] = await g.query(
+        "MATCH ()-[d:DECLARES]->() WITH count(d) AS d MATCH ()-[i:IN_SCOPE]->() RETURN d, count(i) AS i"
+    );
+    expect(c.i).toBe(c.d);
+    // nothing from later milestones
+    const tables = (await g.query("CALL show_tables() RETURN name")).map((r) => r.name);
+    for (const t of [
+        "CALLS",
+        "ARGUMENT_TO",
+        "RETURNS_TO",
+        "READS_PROPERTY",
+        "WRITES_PROPERTY",
+        "ALIASES",
+        "CAPTURES",
+        "CONTROL_DEPENDS_ON",
+        "CHILD",
+    ])
+        expect(tables).not.toContain(t);
 });
 
 test("21: idempotent and well formed over the fixtures", async () => {
