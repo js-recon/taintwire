@@ -309,6 +309,7 @@ export function flatten(ast: Node, file: string) {
     const parentScope = new Map<string, string>();
     const bindings = new Map<string, Map<string, Node>>(); // scope -> name -> its first declaration
     const declScope = new Map<Node, string>(); // DECLARES target -> its scope
+    const selfNames = new Set<Node>(); // named function expressions' own names
     const uses: [Node, Node, string | undefined][] = []; // [Identifier, the operation it's an operand of, its scope]
     const notRef = new Set<Node>(); // `export { a } from "x"`: `a` is the other module's name
     const f: Facts = { flows: [], stores: [], writes: [], writeOnly: new Set() };
@@ -367,11 +368,15 @@ export function flatten(ast: Node, file: string) {
             if (!s) continue;
             push("IN_SCOPE", t.type, SCOPE, { from: idOf(t), to: s });
             declScope.set(t, s);
-            // `var x; var x;` or a param redeclared by `var`: one binding, summarised by its first declaration
+            // `var x; var x;` or a param redeclared by `var`: one binding, summarised by its first declaration.
+            // A named function expression's own name is bound outside its params and body, so any of those shadows it.
+            if (node.type === "FunctionExpression" && t === node.id) selfNames.add(t);
             if (!bindings.has(s)) bindings.set(s, new Map());
             const names = bindings.get(s)!;
             const first = names.get((t as Node & { name: string }).name);
-            if (!first || t.start! < first.start!) names.set((t as Node & { name: string }).name, t);
+            const rank = (d: Node) => (selfNames.has(d) ? 1 : 0);
+            if (!first || rank(t) < rank(first) || (rank(t) === rank(first) && t.start! < first.start!))
+                names.set((t as Node & { name: string }).name, t);
         }
 
         const n = node as Node & { name?: unknown; value?: unknown; operator?: unknown };

@@ -75,6 +75,8 @@ var x = 2;
 
 Both `x`s are `DECLARES` targets with their own `IN_SCOPE`, but they are one binding. The same goes for a parameter redeclared with `var`. `bindings` keeps the declaration with the lowest `startOffset` for each scope and name, and every `REFERS_TO`, `READS`, `WRITES` and `FLOWS_TO` for the binding targets that one node. The second declarator still `WRITES` the binding, through the first `x`, with `access` naming the second `x`.
 
+There's one exception to "first wins". A named function expression's own name shares the function scope in this model. In ECMAScript it's bound in an environment outside the params and body. So any param, `var` or function of the same name shadows it, whatever its position. In `const f = function g(g) { return g; }` the `return g` resolves to the parameter, and in `function g() { var g = 1; return g; }` it resolves to the `var`. Without a shadow, `g` resolves to the function's own name.
+
 ## READS and WRITES
 
 ### The operation

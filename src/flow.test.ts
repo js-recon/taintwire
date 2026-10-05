@@ -74,6 +74,19 @@ const SRC: Record<string, string> = {
     ].join("\n"),
     siblings: "{\n    const x = 1;\n    x;\n}\n{\n    const x = 2;\n    x;\n}",
     occurrences: "let x = 1;\nx = x + x;",
+    // adversarial resolution cases
+    fnExprParam: "const f = function g(g) {\n    return g;\n};",
+    fnExprVar: "const f = function g() {\n    var g = 1;\n    return g;\n};",
+    paramShadow: "const x = 1;\nfunction f(x) {\n    return x;\n}",
+    paramDefault: "const a = 0;\nfunction f(a, b = a) {}",
+    closure: "function outer() {\n    let v = 1;\n    return () => v;\n}",
+    labelCollision: "const outer = 1;\nouter: for (;;) {\n    break outer;\n}",
+    keyCollision: "const foo = 1;\n({ foo: 2 });\nclass C { foo() {} }\nobj.foo;",
+    optionalChain: "const a = {}, k = 'k';\na?.b;\na?.[k];",
+    switchShared: "switch (1) {\n    case 1:\n        let s = 1;\n    case 2:\n        s;\n}",
+    catchShadow: "const e = 1;\ntry {} catch (e) {\n    e;\n}\ne;",
+    implicit: "typeof missing;\nfunction f() {\n    return arguments;\n}",
+    patternKey: "const k = 'a', o = {};\nconst { [k]: v } = o;",
 };
 const file = (name: string) => `${name}.${name === "types" ? "ts" : "js"}`;
 
@@ -657,6 +670,30 @@ test("A20: global invariants over every case", async () => {
         "CHILD",
     ])
         expect(tables).not.toContain(t);
+});
+
+test("regression: a named function expression's name is shadowed by its params and vars", async () => {
+    expect(await resolved("fnExprParam")).toEqual(["2:11 -> 1:21"]);
+    expect(await resolved("fnExprVar")).toEqual(["3:11 -> 2:8"]);
+    expect(await edges("fnExprVar", "WRITES")).toContain("VariableDeclarator(g = 1) -> g:decl");
+    // without a shadow the name still resolves to itself (see the named-expression test)
+    expect(await edges("functionExpression", "REFERS_TO")).toEqual(["internal -> internal:decl"]);
+});
+
+test("adversarial resolution: params, defaults, closures, switch, catch", async () => {
+    expect(await resolved("paramShadow")).toEqual(["3:11 -> 2:11"]);
+    expect(await resolved("paramDefault")).toEqual(["2:18 -> 2:11"]); // b = a sees the param a, not the outer a
+    expect(await resolved("closure")).toEqual(["3:17 -> 2:8"]);
+    expect(await resolved("switchShared")).toEqual(["5:8 -> 3:12"]);
+    expect(await resolved("catchShadow")).toEqual(["3:4 -> 2:14", "5:0 -> 1:6"]);
+    expect(await resolved("patternKey")).toEqual(["2:9 -> 1:6", "2:19 -> 1:15"]);
+});
+
+test("adversarial non-references: names that collide with declared bindings", async () => {
+    expect(await resolved("labelCollision")).toEqual([]); // label `outer` vs const `outer`
+    expect(await resolved("keyCollision")).toEqual([]); // key, method and property `foo` vs const `foo`
+    expect(await edges("optionalChain", "REFERS_TO")).toEqual(["a -> a:decl", "a -> a:decl", "k -> k:decl"]);
+    expect(await resolved("implicit")).toEqual([]); // undeclared typeof and `arguments` stay unresolved
 });
 
 test("21: idempotent and well formed over the fixtures", async () => {
