@@ -6,6 +6,8 @@ sidebar_label: Introduction
 
 # taintwire
 
+![taintwire](/img/banner.png)
+
 taintwire parses JavaScript into a Babel AST and loads it into an embedded [LadybugDB](https://ladybugdb.com/) graph, where you query it with openCypher. Every AST node becomes a graph node labelled with its Babel type, and every parent-to-child link becomes an edge. With the default parser, every node also gets a [CS-MAST-S](https://cs-mast.ss0x00.com) structural hash.
 
 ```js

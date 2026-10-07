@@ -1,0 +1,84 @@
+name: Publish taintwire
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  version_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check version mismatch
+        run: |
+          PACKAGE_JSON_VERSION=$(jq -r ".version" package.json)
+          CHANGELOG_VERSION=$(grep -E "^## [0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?" CHANGELOG.md | head -n 1 | sed -E 's/^## ([0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?).*/\1/')
+          GITHUB_RELEASE_VERSION=$(echo "$GITHUB_RELEASE_VERSION_RAW" | sed -E 's/^[[:space:]]*v//')
+          if [[ "$PACKAGE_JSON_VERSION" != "$CHANGELOG_VERSION" ]]; then
+            echo "Version mismatch: package.json ($PACKAGE_JSON_VERSION) != CHANGELOG.md ($CHANGELOG_VERSION)"
+            exit 1
+          elif [[ "$PACKAGE_JSON_VERSION" != "$GITHUB_RELEASE_VERSION" ]]; then
+            echo "Version mismatch: package.json ($PACKAGE_JSON_VERSION) != release tag ($GITHUB_RELEASE_VERSION)"
+            exit 1
+          fi
+          echo "[✓] Version matches: $PACKAGE_JSON_VERSION"
+        env:
+          GITHUB_RELEASE_VERSION_RAW: ${{ github.event.release.tag_name }}
+
+  build:
+    needs: version_check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm audit
+      - run: npm run build
+      - run: npm test
+
+  publish-npm:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org/
+      - run: npm ci
+      - run: npm run build
+      - name: Ensure npm CLI supports OIDC trusted publishing
+        run: npm install -g npm@latest
+      - name: Stage release to npm via OIDC
+        run: |
+          TAG="latest"
+          [[ "$VERSION" == *"beta"* ]] && TAG="beta"
+          [[ "$VERSION" == *"alpha"* ]] && TAG="alpha"
+          npm stage publish --tag $TAG
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+
+  sync_dev:
+    needs: publish-npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # Fast-forward only: creates no commit, so no signing key is needed.
+      # Fails if dev got new commits after the release PR was merged; sync by hand then.
+      - name: Fast-forward dev to main
+        run: |
+          git checkout dev
+          git merge --ff-only origin/main
+          git push origin dev
