@@ -14,7 +14,7 @@ Branding assets live in `docs/static/img/` (`banner.png`, `logo.png`, `favicon.p
 
 ## Release process
 
-Releases go out through npm **OIDC trusted publishing** from `.github/workflows/publish.yml`. No npm token exists anywhere. The trusted publisher is scoped to staged publishes (`npm stage publish`), the same as js-recon, so every release ends with a human 2FA approval.
+Releases go out through npm **OIDC trusted publishing** from `.github/workflows/publish.yaml`, in the `publish` GitHub environment. No npm token exists anywhere. The trusted publisher is scoped to staged publishes (`npm stage publish`), the same as js-recon, so every release ends with a human 2FA approval.
 
 Bump the version or edit CHANGELOG only when the user asks for a release.
 
@@ -47,7 +47,7 @@ Bump the version or edit CHANGELOG only when the user asks for a release.
 
     Add `--prerelease` for alpha/beta versions. The npm dist-tag is chosen from the tag name: `alpha`, `beta`, otherwise `latest`.
 
-6. **Watch `publish.yml`:** `gh run list --repo js-recon/taintwire --workflow "Publish taintwire"`. It runs `version_check` → `build` (npm ci, audit, build, test) → `publish-npm` (stages via OIDC) → `sync_dev` (fast-forwards `dev` to `main`; if `dev` moved after the merge, this job fails, so sync by hand).
+6. **Watch `publish.yaml`:** `gh run list --repo js-recon/taintwire --workflow "Publish taintwire"`. It runs `version_check` → `build` (npm ci, audit, build, test) → `publish-npm` (stages via OIDC) → `sync_dev` (fast-forwards `dev` to `main`; if `dev` moved after the merge, this job fails, so sync by hand).
 
 7. **Human-only:** a staged package is not live. Report the stage id (`npm stage list @js-recon/taintwire`, or the "Staged Packages" tab on npmjs.com) and wait. The user runs `npm stage approve <stage-id>` (2FA) or clicks Approve on npmjs.com. Claude cannot do this step.
 
@@ -59,8 +59,8 @@ npm only lets you configure a trusted publisher on a package that already exists
 
 1. Created `dev` from `main`.
 2. The user ran `npm publish --access public` locally for a placeholder `0.0.1` (2FA).
-3. On npmjs.com → `@js-recon/taintwire` → Settings → Trusted publisher → GitHub Actions: org `js-recon`, repo `taintwire`, workflow `publish.yml`, no environment. Publishing access: require 2FA and disallow tokens.
+3. On npmjs.com → `@js-recon/taintwire` → Settings → Trusted publisher → GitHub Actions: org `js-recon`, repo `taintwire`, workflow `publish.yaml`, environment `publish`. The GitHub environment was created with `gh api -X PUT repos/js-recon/taintwire/environments/publish`. npm can't edit these fields afterwards; to change them, delete the connection and create it again. Publishing access: require 2FA and disallow tokens.
 4. `npm deprecate @js-recon/taintwire@0.0.1 "placeholder, use >=0.1.0"`.
 5. `0.1.0` was the first release through the workflow above.
 
-If `publish.yml` is ever renamed, update the trusted publisher on npmjs.com in the same change, otherwise OIDC auth fails.
+If `publish.yaml` is renamed or the job's `environment:` changes, update the trusted publisher on npmjs.com in the same change, otherwise OIDC auth fails.

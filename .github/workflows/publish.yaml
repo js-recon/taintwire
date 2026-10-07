@@ -44,6 +44,8 @@ jobs:
   publish-npm:
     needs: build
     runs-on: ubuntu-latest
+    # Must match the trusted publisher on npmjs.com (workflow publish.yaml, environment publish).
+    environment: publish
     permissions:
       id-token: write
       contents: read
