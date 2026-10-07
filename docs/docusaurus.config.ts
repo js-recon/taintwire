@@ -39,6 +39,7 @@ const config: Config = {
             items: [
                 { type: "docSidebar", sidebarId: "apiSidebar", position: "left", label: "API" },
                 { type: "docSidebar", sidebarId: "implementationSidebar", position: "left", label: "Implementation" },
+                { href: "https://taintwire-explorer.pages.dev", label: "Explorer", position: "left" },
                 { href: "https://github.com/js-recon/taintwire", label: "GitHub", position: "right" },
             ],
         },
