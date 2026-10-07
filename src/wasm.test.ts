@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { afterAll, expect, test } from "vitest";
 import * as taintwire from "./index.js";
-import { wasmBackend } from "./wasm.js";
+const { wasmBackend } = taintwire;
 
 // The nodejs variant of @ladybugdb/wasm-core has the browser build's API, so this exercises the browser backend.
 const lbug = createRequire(import.meta.url)("@ladybugdb/wasm-core/nodejs");

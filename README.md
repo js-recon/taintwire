@@ -28,6 +28,10 @@ await graph.close();
 
 Persist with `taintwire.import(code, { dbPath: "graph.lbug" })`, or write an in-memory graph out with `await graph.save("graph.lbug")` (refuses to overwrite). Reopen with `taintwire.TaintGraph.open("graph.lbug")`. The raw Ladybug handles are on `graph.db` / `graph.connection`.
 
+### Browser
+
+`import * as taintwire from "@js-recon/taintwire/browser"` runs the same API on LadybugDB's WASM build (install `@ladybugdb/wasm-core@0.21.2` alongside). See [Browser (WASM)](https://taintwire.js-recon.io/api/browser) for the worker path and the `process` shim.
+
 ### Parser
 
 `parser` picks how source is parsed, per graph: `taintwire.import(code, { parser })` or `TaintGraph.open(dbPath, { parser })`.

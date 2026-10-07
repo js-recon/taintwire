@@ -8,3 +8,4 @@ setBackend(wasmBackend(lbug));
 
 export const setWorkerPath = lbug.setWorkerPath;
 export * from "./core.js";
+export { wasmBackend } from "./wasm.js";

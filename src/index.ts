@@ -17,3 +17,4 @@ setBackend({
 });
 
 export * from "./core.js";
+export { wasmBackend } from "./wasm.js";
