@@ -16,10 +16,12 @@ First public release on npm as `@js-recon/taintwire`.
     - intra-procedural `FLOWS_TO`
 - Static call graph: `CALLS`, `ARGUMENT_TO`, `RETURNS_TO`.
 - `RELATIONS`, the stable list of edge-table names.
+- `npm run graph:stats -- <file.lbug>` prints what a saved graph contains.
 - Docs site at https://taintwire.js-recon.io.
 
 ### Fixed
 
+- Child keys now come from both Babel and cs-mast, so subtrees cs-mast walks but Babel doesn't (for example TS enum `members`) are no longer dropped from the graph.
 - Callee aliases resolve iteratively in linear time.
 - Params and vars now shadow a named function expression's own name.
 - Opening a graph creates every relationship table.
