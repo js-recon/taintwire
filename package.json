@@ -1,6 +1,6 @@
 {
     "name": "@js-recon/taintwire",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Graph-based (LadybugDB/openCypher) AST and taint analysis for JavaScript",
     "type": "module",
     "main": "build/index.js",
@@ -26,11 +26,29 @@
         "@babel/parser": "8.0.4",
         "@babel/types": "8.0.4",
         "@ladybugdb/core": "0.21.2",
-        "@shriyanss/cs-mast": "0.1.8"
+        "@shriyanss/cs-mast": "0.1.8",
+        "@babel/types-7": "npm:@babel/types@^7.29.8"
     },
     "devDependencies": {
+        "@ladybugdb/wasm-core": "0.21.2",
         "@types/node": "24.12.4",
         "typescript": "5.9.2",
         "vitest": "4.1.11"
+    },
+    "exports": {
+        ".": {
+            "browser": "./build/browser.js",
+            "default": "./build/index.js"
+        },
+        "./browser": "./build/browser.js",
+        "./package.json": "./package.json"
+    },
+    "peerDependencies": {
+        "@ladybugdb/wasm-core": "0.21.2"
+    },
+    "peerDependenciesMeta": {
+        "@ladybugdb/wasm-core": {
+            "optional": true
+        }
     }
 }

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 - 2026-10-07
+
+### Added
+
+- Browser support: `@js-recon/taintwire/browser` (also picked by bundlers through the `browser` export condition) runs the same API on LadybugDB's WASM build. Install `@ladybugdb/wasm-core@0.21.2` alongside it; it is an optional peer dependency. `setWorkerPath()` points Ladybug at its worker script.
+- `TaintGraph.open(path, { backend })`, the `Backend` type and `wasmBackend()` for running on another Ladybug build.
+
+### Changed
+
+- The engine no longer imports `node:crypto`, `node:fs` or `node:module`. cs-mast's Babel 7 node types come from a pinned `@babel/types-7` alias instead of a `createRequire` lookup.
+
 ## 0.1.0 - 2026-10-07
 
 First public release on npm as `@js-recon/taintwire`.

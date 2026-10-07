@@ -110,7 +110,7 @@ Closes the connection and the database. An in-memory graph is discarded, so `sav
 
 ### `graph.db` / `graph.connection`
 
-The raw `@ladybugdb/core` `Database` and `Connection`, for anything the wrapper doesn't cover. Writing to the database through them can break the assumptions `add()`, `save()` and `code()` rely on.
+The raw Ladybug `Database` and `Connection` (`@ladybugdb/core` in Node, `@ladybugdb/wasm-core` in the [browser](browser.md)), for anything the wrapper doesn't cover. Writing to the database through them can break the assumptions `add()`, `save()` and `code()` rely on.
 
 ## `Parser`
 
