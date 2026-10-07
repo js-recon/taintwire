@@ -20,6 +20,12 @@ export type Parser = "cs-mast" | "babel";
 const require = createRequire(import.meta.url);
 const csMastBabelTypes: typeof import("@babel/types") = createRequire(require.resolve("@shriyanss/cs-mast"))("@babel/types");
 
+// Child keys per node type: ours and cs-mast's. They differ for some nodes (TS enum `members`, `typeParameters` on
+// calls, `TSExpressionWithTypeArguments`, ...), and a key we don't walk would drop that subtree from the graph.
+const CHILD_KEYS: Record<string, readonly string[]> = {};
+for (const keys of [VISITOR_KEYS, csMastBabelTypes.VISITOR_KEYS] as Record<string, readonly string[]>[])
+    for (const [t, ks] of Object.entries(keys)) CHILD_KEYS[t] = [...new Set([...(CHILD_KEYS[t] ?? []), ...ks])];
+
 // scat only covers 25 node types; every other type goes in sinc so every node is hashed.
 // cs-mast drops sinc entries already covered by scat, so passing all types is fine.
 export const CS_MAST_CONFIG: CsMastConfig = {
@@ -359,7 +365,7 @@ export function flatten(ast: Node, file: string) {
             inner = { scope: s.id!, varScope: VAR_SCOPES.has(kind) ? s.id! : outer.varScope, fn: isFunction(node) ? node : outer.fn };
         }
 
-        const keys: readonly string[] = VISITOR_KEYS[node.type] ?? [];
+        const keys = CHILD_KEYS[node.type] ?? [];
         const props: Record<string, unknown> = {};
 
         for (const [k, v] of Object.entries(node)) {
