@@ -10,7 +10,8 @@
     ],
     "scripts": {
         "build": "rm -rf build/ && tsc",
-        "test": "vitest run --testTimeout=30000"
+        "test": "vitest run --testTimeout=30000",
+        "graph:stats": "node scripts/graph-stats.mjs"
     },
     "author": "Shriyans Sudhi",
     "license": "MIT",
