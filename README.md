@@ -1,5 +1,11 @@
 # taintwire
 
+<p align="center">
+  <a href="https://taintwire.js-recon.io">
+    <img src="https://raw.githubusercontent.com/js-recon/taintwire/main/docs/static/img/banner.png" alt="taintwire" width="600">
+  </a>
+</p>
+
 Graph-based AST/taint analysis for JavaScript. Parses JS through [CS-MAST](https://cs-mast.ss0x00.com) (the Babel AST with a Merkle-style hash on every node) and loads the AST into an embedded [LadybugDB](https://ladybugdb.com/) graph, queryable with openCypher.
 
 > Research stage. API will change before it replaces JS Recon's taint engine.

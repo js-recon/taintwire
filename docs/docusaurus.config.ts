@@ -5,6 +5,8 @@ const config: Config = {
     title: "taintwire",
     tagline: "Graph-based AST and taint analysis for JavaScript",
 
+    favicon: "img/favicon.png",
+
     url: "https://taintwire.js-recon.io",
     baseUrl: "/",
 
@@ -30,8 +32,10 @@ const config: Config = {
     ],
 
     themeConfig: {
+        image: "img/banner.png",
         navbar: {
             title: "taintwire",
+            logo: { alt: "taintwire logo", src: "img/logo.png" },
             items: [
                 { type: "docSidebar", sidebarId: "apiSidebar", position: "left", label: "API" },
                 { type: "docSidebar", sidebarId: "implementationSidebar", position: "left", label: "Implementation" },
