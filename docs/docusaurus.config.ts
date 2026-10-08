@@ -5,7 +5,7 @@ const config: Config = {
     title: "taintwire",
     tagline: "Graph-based AST and taint analysis for JavaScript",
 
-    favicon: "img/favicon.png",
+    favicon: "img/favicon.ico",
 
     url: "https://taintwire.js-recon.io",
     baseUrl: "/",

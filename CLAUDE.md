@@ -6,7 +6,7 @@ Babel/CS-MAST AST → LadybugDB graph library, published to npm as `@js-recon/ta
 - Test: `npm test` (vitest)
 - Docs: `cd docs && npx docusaurus build` (fails on broken links)
 
-Branding assets live in `docs/static/img/` (`banner.png`, `logo.png`, `favicon.png`, downscaled from the originals with `sips -Z`). The README pulls the banner from `raw.githubusercontent.com/.../main/...` so it renders on npmjs.com too.
+Branding assets live in `docs/static/img/` (`banner.png`, `logo.png`, `favicon.ico`; PNGs downscaled from the originals with `sips -Z`, favicon converted with `ffmpeg`). The README pulls the banner from `raw.githubusercontent.com/.../main/...` so it renders on npmjs.com too.
 
 ## Branches
 
