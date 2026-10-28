@@ -74,7 +74,7 @@ None of these create `FLOWS_TO` yet. They're `READS`/`WRITES` only, or nothing.
 | Deferred | Example | Why | Later |
 | --- | --- | --- | --- |
 | Arguments into the call's value | `foo(x)` | The result needn't depend on any argument. `foo` and `x` are read. For a resolved call, `x` goes `ARGUMENT_TO` the param and the result comes back through `RETURNS_TO`. | [done](calls.md) for resolved calls |
-| Unresolved calls | `eval(x)`, `obj.m(x)` | Opaque: no flow through them. | property pass, host models |
+| Unresolved calls | `eval(x)`, `obj.m(x)` | Opaque: no flow through them, except the [builtins](#builtins) below. | property pass, host models |
 | Member reads | `obj.foo` | The property's value isn't the object. No `obj → obj.foo`. The `MemberExpression` itself still flows on, for example into `const y = obj.foo`. | `READS_PROPERTY` |
 | Property writes | `obj.foo = v` | The heap isn't modelled. `v` flows into the assignment but stops there. | `WRITES_PROPERTY`, `ALIASES` |
 | Destructuring | `const { a } = o`, `[a] = arr` | It's a property or element read, like `obj.foo`. `a` is written, but nothing flows into it. | property pass |
@@ -83,6 +83,17 @@ None of these create `FLOWS_TO` yet. They're `READS`/`WRITES` only, or nothing.
 | `await`, `yield`, Promises, callbacks | `await p` | Promise and callback semantics. | later |
 | Function values | `function f() {}` | The function isn't a `FLOWS_TO` value flowing into `f`. The call graph reads declarations directly. | |
 | Implicit flow | `if (secret) y = 1` | Control dependence. | `CONTROL_DEPENDS_ON` |
+
+## Builtins
+
+An unresolved call to one of these builtins carries its input into its result, as `FLOWS_TO input → call`:
+
+| Kind | Names | Input |
+| --- | --- | --- |
+| Global functions | `decodeURIComponent`, `decodeURI`, `unescape`, `String`, `Object` | the first argument |
+| String methods | `slice`, `substring`, `substr`, `trim`, `trimStart`, `trimEnd`, `toLowerCase`, `toUpperCase`, `padStart`, `padEnd`, `repeat`, `normalize`, `replace`, `replaceAll`, `toString`, `valueOf`, `at`, `concat` | the receiver (`x` in `x.slice(1)`), plus every argument for `concat` |
+
+A global function counts only when its name doesn't resolve to a local binding. Methods match by name alone, since the receiver's type isn't known, so `arr.slice(1)` also passes `arr` through. That over-approximation is acceptable for taint. Encoders (`encodeURIComponent`, `escape`) are deliberately absent: their output is safe in HTML, so they act as sanitizers. A call that resolves (`CALLS`) never gets these edges.
 
 ## Coverage
 

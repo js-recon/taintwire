@@ -16,14 +16,15 @@ title: Roadmap and limitations
 - `REFERS_TO`, `READS` and `WRITES`: each use of a name resolved to its declaration, and each access classified with its exact occurrence. See [References, reads and writes](references.md).
 - `FLOWS_TO`: a conservative, flow-insensitive, intra-procedural value-flow graph through expressions and variables. See [Value flow](value-flow.md).
 - `CALLS`, `ARGUMENT_TO` and `RETURNS_TO`: statically resolved calls, with argument-to-parameter and return-to-callsite flow, so value paths cross functions. See [Calls, arguments and returns](calls.md).
-- Webpack 5 module recovery: `addFiles()` loads a build's chunks together, and `IMPORTS`/`EXPORTS` plus namespace member resolution link calls and value reads across chunks. See [Bundler support: webpack](../bundlers/webpack.md).
+- Webpack 4 and 5 module recovery: `addFiles()` loads a build's chunks together, and `IMPORTS`/`EXPORTS` plus namespace resolution link calls and value reads across chunks, for ES and CommonJS modules, `import()` and `eval` dev builds. See [Bundler support: webpack](../bundlers/webpack.md).
+- Builtin pass-through: `FLOWS_TO` through unresolved decoders and string methods. See [Value flow: Builtins](value-flow.md#builtins).
 
 ## Planned
 
 What's still needed before taint queries work, in dependency order:
 
 1. **Property and heap flow.** `READS_PROPERTY`, `WRITES_PROPERTY` and points-to over allocation sites, covering member access, destructuring, for-of/for-in and object/array literals. All of these are [deferred](value-flow.md#deferred) for now. See the [design](property-design.md).
-2. **More module recovery.** Webpack 5 ESM modules are done ([webpack](../bundlers/webpack.md)). Still to do: webpack CommonJS modules and `import()` namespaces, plain ES `import`/`export` between files, and other bundlers' runtimes (Turbopack, Rspack, Vite/Rollup chunks).
+2. **More module recovery.** Webpack 4 and 5 are done ([webpack](../bundlers/webpack.md)). Still to do: plain ES `import`/`export` between files, and other bundlers' runtimes (Turbopack, Rspack, Vite/Rollup chunks).
 3. **Control flow.** A CFG, `CONTROL_DEPENDS_ON` for implicit flows, and optionally reaching definitions or SSA to refine the flow-insensitive binding summaries.
 4. **Taint rules.** Source, sink and sanitizer patterns. Taint is then `FLOWS_TO|ARGUMENT_TO|RETURNS_TO` reachability from a source to a sink.
 5. **Integration into JS Recon**, replacing its current taint engine.

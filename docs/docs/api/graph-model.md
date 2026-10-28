@@ -102,6 +102,8 @@ See [Scopes](../implementation/scopes.md) for the full rules and what isn't mode
 
 Use `key` to tell children apart. For example, `-[:SON {key: 'callee'}]->` is the function being called, while `-[:SON {key: 'arguments', idx: 0}]->` is its first argument.
 
+One key isn't a Babel field: `evaluated` links an `eval("<string literal>")` call to the `File` parsed from that string, a virtual file named `<file>#eval@<offset>` (only with [`addFiles()`](reference.md#graphaddfiles)/`add()`). See [webpack: eval builds](../bundlers/webpack.md#eval-builds).
+
 ### `DECLARES`
 
 `(declarer)-[:DECLARES]->(identifier)` links a node to each `Identifier` it introduces as a JavaScript binding. The target is the same `Identifier` node that's already in the tree, not a copy. It has the same `id` and `hash`, and is still reachable through `SON`. `DECLARES` has no properties.
@@ -202,13 +204,13 @@ Identifier y (decl) ─> Identifier y (use) ─┘
 
 - A variable's declaration `Identifier` is the summary for its value: every write flows into it, and it flows out to every read. This is flow-insensitive, so order isn't tracked and cycles are normal (`x = x + 1`).
 - Values flow through binary, logical, unary (not `void` or `delete`), conditional (branches only), template, sequence (last only), assignment and update expressions, and into `ReturnStatement`.
-- No flow through member access, destructuring, iteration, object and array literals, or unresolved calls yet. Resolved calls continue through `ARGUMENT_TO` and `RETURNS_TO`. The one exception is a member read on a bundler module namespace (`ns.key`), which gets `FLOWS_TO` from the exported value. See [`EXPORTS`](#exports).
+- No flow through member access, destructuring, iteration, object and array literals, or unresolved calls yet. Resolved calls continue through `ARGUMENT_TO` and `RETURNS_TO`. The exceptions are a member read on a bundler module namespace (`ns.key`), which gets `FLOWS_TO` from the exported value (see [`EXPORTS`](#exports)), and unresolved [builtins](../implementation/value-flow.md#builtins) such as `decodeURIComponent(x)` and `x.slice(1)`, which get `FLOWS_TO` from their input.
 
 See [Value flow](../implementation/value-flow.md).
 
 ### `CALLS`
 
-`(call)-[:CALLS {candidates}]->(fn)` links a `CallExpression` or `OptionalCallExpression` to each function static analysis resolves it to: a `FunctionDeclaration`, `FunctionExpression` or `ArrowFunctionExpression` in the same file, or in another file loaded by the same [`addFiles()`](reference.md#graphaddfiles) call when the callee is an import through a webpack module registry (`(0, ns.key)()`).
+`(call)-[:CALLS {candidates}]->(fn)` links a `CallExpression` or `OptionalCallExpression` to each function static analysis resolves it to: a `FunctionDeclaration`, `FunctionExpression` or `ArrowFunctionExpression` in the same file, or in another file loaded by the same [`addFiles()`](reference.md#graphaddfiles) call when the callee is an import through a webpack module registry (`(0, ns.key)()`, `Object(ns.key)()`, `require.n(ns)()()`).
 
 | Property | Type | Contents |
 | --- | --- | --- |
@@ -244,7 +246,7 @@ See [Calls, arguments and returns](../implementation/calls.md).
 
 ### `IMPORTS`
 
-`(require)-[:IMPORTS {module_id}]->(factory)` links a bundler's require call to the module factory it loads, which can be in another file. For webpack, that's `__webpack_require__(323)` inside a module factory or in the runtime, to the `323(module, exports, require) {...}` factory registered by a chunk. There's one edge per factory with that id.
+`(require)-[:IMPORTS {module_id}]->(factory)` links a bundler's require call to the module factory it loads, which can be in another file. For webpack, that's `__webpack_require__(323)` inside a module factory or in the runtime, `__webpack_require__.t(323, mode)`, or the `__webpack_require__.bind(null, 323)` of an `import()`, to the `323(module, exports, require) {...}` factory registered by a chunk. There's one edge per factory with that id.
 
 | Property | Type | Contents |
 | --- | --- | --- |
@@ -252,7 +254,7 @@ See [Calls, arguments and returns](../implementation/calls.md).
 
 ### `EXPORTS`
 
-`(factory)-[:EXPORTS {name}]->(value)` links a module factory to each value it exports. For webpack, `value` is the body of the getter in `require.d(exports, {name: () => value})`, or the value in the array form `require.d(exports, ["name", 0, value])`.
+`(factory)-[:EXPORTS {name}]->(value)` links a module factory to each value it exports. For webpack, `value` is the body of the getter in `require.d(exports, {name: () => value})` or `require.d(exports, "name", getter)`, the value in the array form `require.d(exports, ["name", 0, value])`, or, for CommonJS, the right side of `exports.name = value`. `module.exports = X` gives `name: "default"`.
 
 | Property | Type | Contents |
 | --- | --- | --- |

@@ -26,8 +26,8 @@ Files are linked only within a single `addFiles()` call. Chunks added one at a t
 
 | Bundler | Status | What's linked |
 | --- | --- | --- |
-| [webpack 5](webpack.md) | Supported (ESM modules) | Module factories, `require.d` exports, `require(id)` namespaces, re-exports. Calls, arguments, returns and value reads cross chunks |
-| webpack 4 | Not yet | Its `require.d(exports, "name", getter)` export form isn't recognised |
+| [webpack 5](webpack.md) | Supported | ES and CommonJS modules, `require.n`/`require.t`/`require.cw` interop, `import()`, `eval` dev builds. Calls, arguments, returns and value reads cross chunks |
+| [webpack 4](webpack.md) | Supported | The same, plus module arrays, `require.d(exports, "name", getter)` and `Object(ns.k)()` |
 | Turbopack (Next.js) | Not yet | |
 | Rspack | Not yet | Emits a webpack-compatible runtime, so it may already work, but it hasn't been tested |
 | Vite / Rollup / esbuild | Not yet | Chunks link with real ES `import`/`export`, which taintwire doesn't resolve across files yet |

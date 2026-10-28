@@ -75,7 +75,7 @@ addFiles(files: { code: string; filename: string }[]): Promise<string[]>;
 
 Parses every file and loads them as one unit. Returns the `File` node ids, in the same order as `files`.
 
-Names still resolve per file, as with `add()`. What `addFiles()` adds is the link between files that a bundler's runtime makes. For a webpack 5 build, a call or value read through the module registry resolves to the function or value in the chunk that defines it, so value paths cross chunks. Load every `.js` file of a build directory in one call. See [Bundler support](../bundlers/index.md).
+Names still resolve per file, as with `add()`. What `addFiles()` adds is the link between files that a bundler's runtime makes. For a webpack 4 or 5 build, a call or value read through the module registry resolves to the function or value in the chunk that defines it, so value paths cross chunks. Load every `.js` file of a build directory in one call. See [Bundler support](../bundlers/index.md).
 
 ```ts
 import { readdirSync, readFileSync } from "node:fs";
@@ -89,6 +89,8 @@ await graph.addFiles(
         .map((f) => ({ filename: f, code: readFileSync(`${dir}/${f}`, "utf8") }))
 );
 ```
+
+Each `eval("<string literal>")` in the files is parsed with the graph's parser and stored as a virtual file `<file>#eval@<offset>`, with its own `Source` row, so `code(id)` works on its nodes. This applies to `add()` too. See [webpack: eval builds](../bundlers/webpack.md#eval-builds).
 
 Rejects if any `filename` is already in the graph or appears twice in `files`.
 
@@ -196,15 +198,19 @@ Turns a Babel AST into the rows `add()` loads, with no database involved: node r
 ## `flattenFiles()`
 
 ```ts
-function flattenFiles(units: [ast: Node, file: string][]): {
+function flattenFiles(
+    units: [ast: Node, file: string][],
+    opts?: { parse?: (code: string) => Node }
+): {
     rootIds: string[];
     nodes: Map<string, Row[]>;
     scopes: ScopeRow[];
     rels: Record<Relation, Map<string, Edge[]>>; // as flatten()
+    evals: { filename: string; code: string }[];
 };
 ```
 
-What `addFiles()` loads. The same as `flatten()`, but for several files, with one `rootId` per unit, in order. Each file keeps its own scopes, and the [webpack registry pass](../bundlers/webpack.md#how-it-works) links them. `flatten(ast, file)` is `flattenFiles([[ast, file]])`. Exported for testing and research, and likely to change.
+What `addFiles()` loads. The same as `flatten()`, but for several files, with one `rootId` per unit, in order. Each file keeps its own scopes, and the [webpack registry pass](../bundlers/webpack.md#how-it-works) links them. With `parse`, each `eval("<string literal>")` is parsed and walked in the eval's scope, and listed in `evals` as a virtual file (`addFiles()` stores their `Source` rows). Without it, eval strings stay strings. `flatten(ast, file)` is `flattenFiles([[ast, file]])`. Exported for testing and research, and likely to change.
 
 ## `declared()`
 
