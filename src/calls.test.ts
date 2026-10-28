@@ -278,10 +278,9 @@ test("demo: location.search through pass() into eval()", async () => {
     expect(p.rels).toEqual(["ARGUMENT_TO", "FLOWS_TO", "FLOWS_TO", "RETURNS_TO", "FLOWS_TO", "FLOWS_TO"]);
 });
 
-test("demo: x.trim() is a member call, so the path stops at x (no fake member-call flow)", async () => {
+test("demo: x.trim() is an unresolved builtin string method, so its receiver flows through it to the sink", async () => {
     expect(await flows("demoTrim", "location.search", "x")).toBe(true); // through q and the argument
-    expect(await flows("demoTrim", "location.search", "cleanish")).toBe(false);
-    // with a resolvable function the same sink is reached: see demoEval
+    expect(await flows("demoTrim", "location.search", "cleanish")).toBe(true); // x.trim() passes x through, then RETURNS_TO
 });
 
 test("regression: alias cycles share their definitions", async () => {

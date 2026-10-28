@@ -28,6 +28,8 @@ const SRC: Record<string, string> = {
     nested: "let x, y;\ny = (x = source);",
     ret: "function identity(x) {\n    return x;\n}",
     globals: "const x = location.search;\nconsole.log(x);",
+    builtins:
+        "const h = decodeURIComponent(location.hash.slice(1)).trim();\nconst e = encodeURIComponent(location.hash);\nfunction unescape(s) {\n    return 'x';\n}\nconst u = unescape(location.hash);\nconst c = 'a'.concat(location.hash);",
     // beyond the spec's list
     functionExpression: "const f = function internal() {\n    return internal;\n};",
     classExpression: "const C = class Internal {\n    method() {\n        return Internal;\n    }\n};",
@@ -779,4 +781,11 @@ test("semantic edges survive save() and reopen", async () => {
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
+});
+
+test("builtin pass-through: decoders and string methods carry their input; encoders and shadowed names don't", async () => {
+    expect(await flows("builtins", "location.hash", "decodeURIComponent(location.hash.slice(1)).trim()")).toBe(true);
+    expect(await flows("builtins", "location.hash", "'a'.concat(location.hash)")).toBe(true);
+    expect(await flows("builtins", "location.hash", "encodeURIComponent(location.hash)")).toBe(false);
+    expect(await flows("builtins", "location.hash", "unescape(location.hash)")).toBe(false); // a local function, resolved by CALLS
 });
