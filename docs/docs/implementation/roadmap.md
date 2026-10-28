@@ -16,13 +16,14 @@ title: Roadmap and limitations
 - `REFERS_TO`, `READS` and `WRITES`: each use of a name resolved to its declaration, and each access classified with its exact occurrence. See [References, reads and writes](references.md).
 - `FLOWS_TO`: a conservative, flow-insensitive, intra-procedural value-flow graph through expressions and variables. See [Value flow](value-flow.md).
 - `CALLS`, `ARGUMENT_TO` and `RETURNS_TO`: statically resolved calls, with argument-to-parameter and return-to-callsite flow, so value paths cross functions. See [Calls, arguments and returns](calls.md).
+- Webpack 5 module recovery: `addFiles()` loads a build's chunks together, and `IMPORTS`/`EXPORTS` plus namespace member resolution link calls and value reads across chunks. See [Bundler support: webpack](../bundlers/webpack.md).
 
 ## Planned
 
 What's still needed before taint queries work, in dependency order:
 
 1. **Property and heap flow.** `READS_PROPERTY`, `WRITES_PROPERTY` and points-to over allocation sites, covering member access, destructuring, for-of/for-in and object/array literals. All of these are [deferred](value-flow.md#deferred) for now. See the [design](property-design.md).
-2. **Module recovery.** `IMPORTS`/`EXPORTS` across files, and bundler runtime semantics (webpack module factories, chunk registration), so calls through modules and bundle loaders resolve.
+2. **More module recovery.** Webpack 5 ESM modules are done ([webpack](../bundlers/webpack.md)). Still to do: webpack CommonJS modules and `import()` namespaces, plain ES `import`/`export` between files, and other bundlers' runtimes (Turbopack, Rspack, Vite/Rollup chunks).
 3. **Control flow.** A CFG, `CONTROL_DEPENDS_ON` for implicit flows, and optionally reaching definitions or SSA to refine the flow-insensitive binding summaries.
 4. **Taint rules.** Source, sink and sanitizer patterns. Taint is then `FLOWS_TO|ARGUMENT_TO|RETURNS_TO` reachability from a source to a sink.
 5. **Integration into JS Recon**, replacing its current taint engine.
@@ -44,7 +45,7 @@ Each new edge type is a `RELS` entry plus the emitting code in `flatten()` (or a
 | Simplified scope model | No per-iteration loop scopes, no separate parameter scope, no Annex B function hoisting, no TypeScript namespace scopes | Add them when resolution needs them. See [Scopes: What isn't modelled](scopes.md#what-isnt-modelled) |
 | LadybugDB inline-filter bug | `(n {p: v})` followed by an `OPTIONAL MATCH` that finds nothing returns `n`'s properties as `null` | Filter with `WHERE` ([Query cookbook](../api/queries.md#inline-property-maps-before-optional-match)) |
 | Flow-insensitive bindings | Every write of a variable reaches every read of it, whatever the order, and `FLOWS_TO` has cycles | Reaching definitions or SSA ([Value flow](value-flow.md#flow-insensitive-bindings)) |
-| Per-file resolution | Globals shared between script files, and host objects, stay unresolved | Model the global object and host APIs |
+| Per-file resolution | Globals shared between script files, and host objects, stay unresolved. Files only link through a webpack 5 registry, and only when loaded by one `addFiles()` call | Model the global object and host APIs, then more [bundlers](../bundlers/index.md) |
 | Context-insensitive calls | Every callsite of a function shares its param and return summaries, so `id(s1)` and `id(s2)` mix | Call strings or cloning ([Calls](calls.md#context-insensitivity)) |
 | All-or-nothing call resolution | One unknown definition (a param, an import, a member value) leaves a call unresolved | Property and module recovery, then higher-order flow |
 | Load cost per statement | Import time is dominated by Ladybug, not analysis: about 500 `COPY`/DDL statements for a 178 KB bundle (react-dom: parse 0.6 s, flatten with all semantics 0.24 s, load 5.4 s) | Fewer edge-table pairs, or batching pairs per statement if Ladybug allows it |

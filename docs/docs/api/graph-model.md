@@ -202,13 +202,13 @@ Identifier y (decl) ─> Identifier y (use) ─┘
 
 - A variable's declaration `Identifier` is the summary for its value: every write flows into it, and it flows out to every read. This is flow-insensitive, so order isn't tracked and cycles are normal (`x = x + 1`).
 - Values flow through binary, logical, unary (not `void` or `delete`), conditional (branches only), template, sequence (last only), assignment and update expressions, and into `ReturnStatement`.
-- No flow through member access, destructuring, iteration, object and array literals, or unresolved calls yet. Resolved calls continue through `ARGUMENT_TO` and `RETURNS_TO`.
+- No flow through member access, destructuring, iteration, object and array literals, or unresolved calls yet. Resolved calls continue through `ARGUMENT_TO` and `RETURNS_TO`. The one exception is a member read on a bundler module namespace (`ns.key`), which gets `FLOWS_TO` from the exported value. See [`EXPORTS`](#exports).
 
 See [Value flow](../implementation/value-flow.md).
 
 ### `CALLS`
 
-`(call)-[:CALLS {candidates}]->(fn)` links a `CallExpression` or `OptionalCallExpression` to each function static analysis resolves it to: a `FunctionDeclaration`, `FunctionExpression` or `ArrowFunctionExpression` in the same file.
+`(call)-[:CALLS {candidates}]->(fn)` links a `CallExpression` or `OptionalCallExpression` to each function static analysis resolves it to: a `FunctionDeclaration`, `FunctionExpression` or `ArrowFunctionExpression` in the same file, or in another file loaded by the same [`addFiles()`](reference.md#graphaddfiles) call when the callee is an import through a webpack module registry (`(0, ns.key)()`).
 
 | Property | Type | Contents |
 | --- | --- | --- |
@@ -241,6 +241,24 @@ source ─ARGUMENT_TO─> x (param) ─FLOWS_TO─> x ─FLOWS_TO─> return x; 
 ```
 
 See [Calls, arguments and returns](../implementation/calls.md).
+
+### `IMPORTS`
+
+`(require)-[:IMPORTS {module_id}]->(factory)` links a bundler's require call to the module factory it loads, which can be in another file. For webpack, that's `__webpack_require__(323)` inside a module factory or in the runtime, to the `323(module, exports, require) {...}` factory registered by a chunk. There's one edge per factory with that id.
+
+| Property | Type | Contents |
+| --- | --- | --- |
+| `module_id` | `STRING` | The module id, as written: `"323"` or `"./src/source.js"`. |
+
+### `EXPORTS`
+
+`(factory)-[:EXPORTS {name}]->(value)` links a module factory to each value it exports. For webpack, `value` is the body of the getter in `require.d(exports, {name: () => value})`, or the value in the array form `require.d(exports, ["name", 0, value])`.
+
+| Property | Type | Contents |
+| --- | --- | --- |
+| `name` | `STRING` | The export key, as written. Production builds mangle it (`nm`, `Ay`), so it rarely matches the source name. |
+
+A read `ns.name` or `ns["name"]` of a namespace that `IMPORTS` that factory gets `FLOWS_TO` from the value, and as a callee it resolves through the value to a function for `CALLS`. See [Bundler support: webpack](../bundlers/webpack.md).
 
 ## `props`
 

@@ -15,6 +15,7 @@ Everything below is exported from `@js-recon/taintwire`. TypeScript declarations
 | [`PARSER_OPTIONS`](#parser_options) | const | The `@babel/parser` options |
 | [`CS_MAST_CONFIG`](#cs_mast_config) | const | The cs-mast config used to hash every node |
 | [`flatten()`](#flatten) | function | Low level: AST to node rows, scope rows and edges, without a database |
+| [`flattenFiles()`](#flattenfiles) | function | Low level: `flatten()` for several files at once, linked through a bundler's module registry |
 | [`declared()`](#declared) | function | Low level: the identifiers a single AST node declares |
 | [`scopeKind()`](#scopekind) | function | Low level: the kind of scope a single AST node creates |
 | [`RELATIONS`](#relations) | const | The names of every edge table, in layer order |
@@ -63,6 +64,33 @@ add(code: string, filename?: string): Promise<string>;
 Parses `code` and loads its AST into the graph. Returns the `id` of the new `File` node. `filename` defaults to `"input.js"`.
 
 Rejects if `filename` is already in the graph. That check runs before any AST nodes are written.
+
+`add()` is `addFiles([{ code, filename }])`. Files added by separate `add()` calls aren't linked to each other: use `addFiles()` for the chunks of one bundle.
+
+### `graph.addFiles()`
+
+```ts
+addFiles(files: { code: string; filename: string }[]): Promise<string[]>;
+```
+
+Parses every file and loads them as one unit. Returns the `File` node ids, in the same order as `files`.
+
+Names still resolve per file, as with `add()`. What `addFiles()` adds is the link between files that a bundler's runtime makes. For a webpack 5 build, a call or value read through the module registry resolves to the function or value in the chunk that defines it, so value paths cross chunks. Load every `.js` file of a build directory in one call. See [Bundler support](../bundlers/index.md).
+
+```ts
+import { readdirSync, readFileSync } from "node:fs";
+import { TaintGraph } from "@js-recon/taintwire";
+
+const dir = "dist";
+const graph = await TaintGraph.open();
+await graph.addFiles(
+    readdirSync(dir)
+        .filter((f) => f.endsWith(".js"))
+        .map((f) => ({ filename: f, code: readFileSync(`${dir}/${f}`, "utf8") }))
+);
+```
+
+Rejects if any `filename` is already in the graph or appears twice in `files`.
 
 ### `graph.query()`
 
@@ -157,13 +185,26 @@ function flatten(ast: Node, file: string): {
     rels: Record<
         | "SON" | "DECLARES" | "CREATES_SCOPE" | "PARENT_SCOPE" | "IN_SCOPE"
         | "REFERS_TO" | "READS" | "WRITES" | "FLOWS_TO"
-        | "CALLS" | "ARGUMENT_TO" | "RETURNS_TO",
+        | "CALLS" | "ARGUMENT_TO" | "RETURNS_TO" | "IMPORTS" | "EXPORTS",
         Map<string, Edge[]>
     >;
 };
 ```
 
 Turns a Babel AST into the rows `add()` loads, with no database involved: node rows grouped by node type, `Scope` rows, and edges grouped by `"<fromType>\0<toType>"`. Scope edges use `"Scope"` as the type on their scope end. `REFERS_TO`, `READS`, `WRITES`, `FLOWS_TO`, `CALLS`, `ARGUMENT_TO` and `RETURNS_TO` are resolved within this one file, after the walk. Exported for testing and research, and likely to change.
+
+## `flattenFiles()`
+
+```ts
+function flattenFiles(units: [ast: Node, file: string][]): {
+    rootIds: string[];
+    nodes: Map<string, Row[]>;
+    scopes: ScopeRow[];
+    rels: Record<Relation, Map<string, Edge[]>>; // as flatten()
+};
+```
+
+What `addFiles()` loads. The same as `flatten()`, but for several files, with one `rootId` per unit, in order. Each file keeps its own scopes, and the [webpack registry pass](../bundlers/webpack.md#how-it-works) links them. `flatten(ast, file)` is `flattenFiles([[ast, file]])`. Exported for testing and research, and likely to change.
 
 ## `declared()`
 
@@ -185,7 +226,7 @@ Returns the kind of `Scope` that `node` creates, or `null` if it creates none. `
 ## `RELATIONS`
 
 ```ts
-const RELATIONS: readonly ["SON", "DECLARES", "CREATES_SCOPE", "PARENT_SCOPE", "IN_SCOPE", "REFERS_TO", "READS", "WRITES", "FLOWS_TO", "CALLS", "ARGUMENT_TO", "RETURNS_TO"];
+const RELATIONS: readonly ["SON", "DECLARES", "CREATES_SCOPE", "PARENT_SCOPE", "IN_SCOPE", "REFERS_TO", "READS", "WRITES", "FLOWS_TO", "CALLS", "ARGUMENT_TO", "RETURNS_TO", "IMPORTS", "EXPORTS"];
 ```
 
 The edge tables every graph has, from the moment it's opened. Querying any of them on a graph with no such edges returns no rows. The names are stable. See [Graph model](graph-model.md#edges).
