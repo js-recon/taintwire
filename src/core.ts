@@ -107,6 +107,8 @@ const RELS = {
     CALLS: ["candidates INT64"], // how many functions this callsite may call
     ARGUMENT_TO: ["arg_index INT64", "callsite STRING"], // the argument's position, and its CallExpression's id (`index` and `call` are Cypher keywords)
     RETURNS_TO: [],
+    IMPORTS: ["module_id STRING"], // a bundler require call -> the module factory it loads
+    EXPORTS: ["name STRING"], // a module factory -> the value it exports under `name`
 } as const;
 type Rel = keyof typeof RELS;
 /** Every relationship (edge table) a graph has, in layer order: AST, declarations, scopes, resolution, access, flow, calls. */
@@ -126,6 +128,8 @@ const DEFAULT_PAIRS: Record<Rel, [string, string]> = {
     CALLS: ["CallExpression", "FunctionDeclaration"],
     ARGUMENT_TO: ["Identifier", "Identifier"],
     RETURNS_TO: ["ReturnStatement", "CallExpression"],
+    IMPORTS: ["CallExpression", "ObjectMethod"],
+    EXPORTS: ["ObjectMethod", "Identifier"],
 };
 const relMaps = () => Object.fromEntries(Object.keys(RELS).map((r) => [r, new Map()])) as Record<Rel, Edges>;
 
@@ -145,6 +149,8 @@ type Edge = {
     candidates?: number;
     arg_index?: number;
     callsite?: string;
+    module_id?: string;
+    name?: string;
 };
 type Edges = Map<string, Edge[]>; // key: `${fromType}\0${toType}`
 type Ref = { type: string; slug_ref: string };
@@ -325,6 +331,15 @@ function facts(node: Node, f: Facts) {
 
 /** Flatten a Babel AST into per-type node rows, Scope rows and per-(from,to)-type edges. */
 export function flatten(ast: Node, file: string) {
+    const { rootIds, ...rest } = flattenFiles([[ast, file]]);
+    return { rootId: rootIds[0], ...rest };
+}
+
+/**
+ * Flatten several files into one set of rows and edges. Names resolve per file as in flatten(); what links the files
+ * is the bundler's module registry (webpack 5 chunks), so a call into another chunk gets CALLS, ARGUMENT_TO and RETURNS_TO.
+ */
+export function flattenFiles(units: [Node, string][]) {
     const ids = new Map<Node, string>();
     const idOf = (n: Node) => {
         let id = ids.get(n);
@@ -354,15 +369,16 @@ export function flatten(ast: Node, file: string) {
     const f: Facts = { flows: [], stores: [], writes: [], writeOnly: new Set(), defs: [] };
     const declarer = new Map<Node, Node>(); // DECLARES target -> its declarer
     const calls: Node[] = [];
+    const members: Node[] = [];
     const returns = new Map<Node, Node[]>(); // function -> the ReturnStatements it owns (not its nested functions')
 
     // Iterative walk: minified bundles nest deep enough to blow the JS stack.
-    // Each entry carries its parent and the scopes it sits in: `scope` for lexical bindings, `varScope` for var,
-    // and `fn`, the function that owns any `return` in it.
+    // Each entry carries its parent, the scopes it sits in (`scope` for lexical bindings, `varScope` for var,
+    // and `fn`, the function that owns any `return` in it) and its file.
     type Ctx = { scope?: string; varScope?: string; fn?: Node };
-    const stack: [Node, Node | undefined, Ctx][] = [[ast, undefined, {}]];
+    const stack: [Node, Node | undefined, Ctx, string][] = units.map(([ast, file]) => [ast, undefined, {}, file]);
     while (stack.length) {
-        const [node, parent, outer] = stack.pop()!;
+        const [node, parent, outer, file] = stack.pop()!;
         const id = idOf(node);
 
         const kind = scopeKind(node, parent);
@@ -393,13 +409,14 @@ export function flatten(ast: Node, file: string) {
                 if (!isNode(child)) return;
                 push("SON", node.type, child.type, { from: id, to: idOf(child), key: k, idx: Array.isArray(v) ? i : -1 });
                 const ctx = OUTER_KEYS.has(k) ? outer : inner;
-                stack.push([child, node, ctx]);
+                stack.push([child, node, ctx, file]);
                 if (child.type === "Identifier" && isRef(node, k)) uses.push([child, node, ctx.scope]);
             });
         }
         if (node.type === "ExportNamedDeclaration" && node.source) for (const s of node.specifiers) if (s.type === "ExportSpecifier") notRef.add(s.local);
         facts(node, f);
         if (node.type === "CallExpression" || node.type === "OptionalCallExpression") calls.push(node);
+        if (node.type === "MemberExpression") members.push(node);
         if (node.type === "ReturnStatement" && outer.fn) (returns.get(outer.fn) ?? returns.set(outer.fn, []).get(outer.fn)!).push(node);
         // Same idOf() as SON, so DECLARES targets are the existing Identifier nodes.
         // Every DECLARES target gets its IN_SCOPE from the same declared() call, so the two can't disagree.
@@ -484,6 +501,93 @@ export function flatten(ast: Node, file: string) {
         if (selfNames.has(t) && binding(t) !== t) continue; // a shadowed function-expression name: no use reaches it
         def(binding(t), isFunction(by) && t === (by as { id?: Node | null }).id ? by : null);
     }
+
+    // Webpack 5's module registry (docs/bundlers/webpack.md). A chunk registers module factories `{id(module, exports,
+    // require) {...}}` by pushing `[[chunkIds], factories]`, and the entry chunk keeps its own in `__webpack_modules__`.
+    // A factory exports with `require.d(exports, {key: () => value})` or `require.d(exports, [key, 0, value, key2, getter])`
+    // and imports with `ns = require(id)`, reading `ns.key`. `imported()` sees through `ns.key` to the exported value,
+    // in whichever file it is, for leaves() (so calls resolve) and FLOWS_TO.
+    // ponytail: harmony ESM only; CommonJS module.exports, require.n interop and the namespace an import() resolves to stay unknown.
+    type Any = Node & Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const lit = (n: Node | null | undefined) => (n?.type === "NumericLiteral" || n?.type === "StringLiteral" ? String(n.value) : undefined);
+    const factories = new Map<string, Node[]>(); // module id -> its factories (two builds in one graph can reuse an id)
+    const requires = new Set<Node>(); // require-function bindings: each factory's third param, and the runtime's function
+    const exportsOf = new Map<Node, Node>(); // a factory's `exports` binding -> the factory
+    const register = (o: Node | null | undefined) => {
+        if (o?.type !== "ObjectExpression" || !o.properties.length) return;
+        const found: [string, Any][] = [];
+        for (const p of o.properties as Any[]) {
+            const fn = p.type === "ObjectMethod" ? p : p.value;
+            const id = p.computed ? undefined : lit(p.key);
+            if (p.type === "SpreadElement" || !isFunction(fn) || id === undefined) return;
+            found.push([id, fn]);
+        }
+        for (const [id, fn] of found) {
+            (factories.get(id) ?? factories.set(id, []).get(id)!).push(fn);
+            const [, exp, req] = (fn.params as Node[]).map((p) => (p?.type === "Identifier" ? binding(p) : undefined));
+            if (exp) exportsOf.set(exp, fn);
+            if (req) requires.add(req);
+        }
+    };
+    const cs = calls as Any[];
+    for (const c of cs) {
+        const { callee: f, arguments: [a, , req] } = c;
+        // (self.webpackChunk_x ||= []).push([[chunkIds], {...factories}, runtime?])
+        if (f.type === "MemberExpression" && !f.computed && f.property.name === "push" && a?.type === "ArrayExpression" && a.elements[0]?.type === "ArrayExpression")
+            register(a.elements[1]);
+        // The runtime's `function __webpack_require__(moduleId)` runs `modules[moduleId](module, module.exports, __webpack_require__)`.
+        const fn = req?.type === "Identifier" && c.arguments.length === 3 ? (declarer.get(refers.get(req)!) as Any | undefined) : undefined;
+        if (fn?.type === "FunctionDeclaration" && fn.params.length === 1 && f.type === "MemberExpression" && f.computed && refers.get(f.property) === binding(fn.params[0]))
+            requires.add(refers.get(req)!);
+    }
+    for (const [t, by] of declarer) if (by.type === "VariableDeclarator" && by.id === t) register(by.init); // __webpack_modules__
+    // Exports: each factory's keys and the value(s) behind each.
+    const exported = new Map<Node, Map<string, Node[]>>();
+    const getterValues = (g: Any | null | undefined): Node[] =>
+        !g || !isFunction(g) ? [] : g.body.type === "BlockStatement" ? (returns.get(g) ?? []).flatMap((r: Any) => r.argument ?? []) : [g.body];
+    for (const c of cs) {
+        const { callee: f, arguments: [e, defn] } = c;
+        if (f.type !== "MemberExpression" || f.computed || f.property.name !== "d" || !requires.has(refers.get(f.object)!)) continue;
+        const fac = e?.type === "Identifier" ? exportsOf.get(refers.get(e)!) : undefined;
+        if (!fac) continue;
+        const add = (key: string | undefined, vs: Node[]) => {
+            if (key === undefined) return;
+            const keys = exported.get(fac) ?? exported.set(fac, new Map()).get(fac)!;
+            for (const v of vs) {
+                (keys.get(key) ?? keys.set(key, []).get(key)!).push(v);
+                edge("EXPORTS", fac, v, { name: key });
+            }
+        };
+        if (defn?.type === "ObjectExpression")
+            for (const p of defn.properties as Any[]) {
+                if (p.type !== "SpreadElement" && !p.computed) add(p.key.type === "Identifier" ? p.key.name : lit(p.key), getterValues(p.type === "ObjectMethod" ? p : p.value));
+            }
+        else if (defn?.type === "ArrayExpression")
+            for (let i = 0; i < defn.elements.length; ) {
+                const key = lit(defn.elements[i++]);
+                const b = defn.elements[i++] as Any | null;
+                add(key, b?.type === "NumericLiteral" && b.value === 0 ? [defn.elements[i++]].filter((v): v is Node => !!v) : getterValues(b));
+            }
+    }
+    // Imports: `require(id)` is that module's namespace, and so is a binding whose one definition is such a call.
+    const nsCall = new Map<Node, string>();
+    for (const c of cs) {
+        const id = c.arguments.length === 1 ? lit(c.arguments[0]) : undefined;
+        if (id === undefined || c.callee.type !== "Identifier" || !requires.has(refers.get(c.callee)!)) continue;
+        nsCall.set(c, id);
+        for (const fac of factories.get(id) ?? []) edge("IMPORTS", c, fac, { module_id: id });
+    }
+    const nsBinding = new Map<Node, string>();
+    for (const [d, vs] of defs) if (vs.length === 1 && vs[0] && nsCall.has(vs[0])) nsBinding.set(d, nsCall.get(vs[0])!);
+    // The value(s) `ns.key` / `ns["key"]` reads, or undefined if `ns` isn't a namespace or doesn't export `key`.
+    const imported = (m: Any): Node[] | undefined => {
+        const id = m.object.type === "Identifier" ? nsBinding.get(refers.get(m.object)!) : nsCall.get(m.object);
+        const key = m.computed ? lit(m.property) : m.property.type === "Identifier" ? m.property.name : undefined;
+        if (id === undefined || key === undefined) return;
+        const vs = (factories.get(id) ?? []).flatMap((fac) => exported.get(fac)?.get(key) ?? []);
+        return vs.length ? vs : undefined;
+    };
+    for (const m of members) for (const v of imported(m) ?? []) edge("FLOWS_TO", v, m);
     // The functions a value may be, or null if any part of it is unknown. Flow-insensitive like FLOWS_TO: every
     // definition of a binding counts, in any order. `leaves()` reads one value: the functions it is directly, whether
     // any part is unknown, and the bindings it aliases. Explicit stacks throughout: alias chains in bundles can be long.
@@ -491,9 +595,18 @@ export function flatten(ast: Node, file: string) {
     const leaves = (roots: (Node | null | undefined)[]): Leaves => {
         const out: Leaves = { fns: new Set(), unknown: false, deps: [] };
         const st = [...roots];
+        const seen = new Set<Node>(); // re-exports can form a cycle
         while (st.length) {
             const v = st.pop();
             switch (v?.type) {
+                case "MemberExpression": {
+                    if (seen.has(v)) break;
+                    seen.add(v);
+                    const vs = imported(v);
+                    if (vs) st.push(...vs);
+                    else out.unknown = true;
+                    break;
+                }
                 case "FunctionDeclaration":
                 case "FunctionExpression":
                 case "ArrowFunctionExpression":
@@ -615,7 +728,7 @@ export function flatten(ast: Node, file: string) {
             if (fn.type === "ArrowFunctionExpression" && fn.body.type !== "BlockStatement") edge("RETURNS_TO", fn.body, c); // concise body
         }
     }
-    return { rootId: idOf(ast), nodes, scopes, rels };
+    return { rootIds: units.map(([ast]) => idOf(ast)), nodes, scopes, rels };
 }
 
 /** A LadybugDB-backed graph of one or more parsed JS files. */
@@ -661,11 +774,19 @@ export class TaintGraph {
 
     /** Parse `code` and load its AST into the graph. Returns the id of the File node. */
     async add(code: string, filename = "input.js"): Promise<string> {
-        const { rootId, nodes, scopes, rels } = flatten(parseAst(code, this.parser), filename);
-        // Source first: a duplicate filename fails on the primary key before any nodes are loaded.
-        await this.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, { file: filename, code });
+        return (await this.addFiles([{ code, filename }]))[0];
+    }
+
+    /**
+     * Parse and load several files together, such as every chunk of a bundle, so that references between them
+     * (a webpack module registry) resolve. Files loaded by separate calls aren't linked. Returns the File node ids, in order.
+     */
+    async addFiles(files: { code: string; filename: string }[]): Promise<string[]> {
+        const { rootIds, nodes, scopes, rels } = flattenFiles(files.map((f) => [parseAst(f.code, this.parser), f.filename]));
+        // Sources first: a duplicate filename fails on the primary key before any nodes are loaded.
+        for (const f of files) await this.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, { file: f.filename, code: f.code });
         await this.load(nodes, scopes, rels);
-        return rootId;
+        return rootIds;
     }
 
     /** The source code of the node with this id. */
