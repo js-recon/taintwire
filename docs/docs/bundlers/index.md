@@ -28,6 +28,6 @@ Files are linked only within a single `addFiles()` call. Chunks added one at a t
 | --- | --- | --- |
 | [webpack 5](webpack.md) | Supported | ES and CommonJS modules, `require.n`/`require.t`/`require.cw` interop, `import()`, `eval` dev builds. Calls, arguments, returns and value reads cross chunks |
 | [webpack 4](webpack.md) | Supported | The same, plus module arrays, `require.d(exports, "name", getter)` and `Object(ns.k)()` |
-| [Turbopack](turbopack.md) (Next.js 16) | Supported | ES and CommonJS modules, `ctx.s`/`ctx.v`/`ctx.n` exports, `import()` through loader modules. Calls, arguments, returns and value reads cross chunks |
+| [Turbopack](turbopack.md) (Next.js 15.3+) | Supported | ES and CommonJS modules, `ctx.s`/`ctx.v`/`ctx.n` exports, `import()` through loader modules. Calls, arguments, returns and value reads cross chunks |
 | Rspack | Not yet | Emits a webpack-compatible runtime, so it may already work, but it hasn't been tested |
 | Vite / Rollup / esbuild | Not yet | Chunks link with real ES `import`/`export`, which taintwire doesn't resolve across files yet |
