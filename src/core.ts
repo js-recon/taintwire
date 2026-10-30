@@ -555,7 +555,7 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         if (exp) exportsOf.set(exp, fn);
         if (req) requires.add(req);
     };
-    const register = (o: Any | null | undefined) => {
+    const register = (o: Any | null | undefined, turbo = false) => {
         const found: [string, Any][] = [];
         if (o?.type === "ObjectExpression")
             for (const p of o.properties as Any[]) {
@@ -570,7 +570,7 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
                 if (!isFunction(fn)) return;
                 found.push([String(i), fn]);
             }
-        found.forEach(([id, fn]) => addFactory(id, fn));
+        found.forEach(([id, fn]) => addFactory(id, fn, turbo));
     };
     // Turbopack (docs/bundlers/turbopack.md): `push([script, [group]?, id, id..., factory, ...])`, where a group is the
     // same list, and each factory is installed under the ids before it. False (nothing registered) for any other array.
@@ -600,6 +600,8 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         if (f.type === "MemberExpression" && !f.computed && f.property.name === "push" && args[0]?.type === "ArrayExpression") {
             const found: [string, Any][] = [];
             if (args[0].elements[0]?.type === "ArrayExpression") register(args[0].elements[1]);
+            // Turbopack before Next.js 15.5: push([script, {id: factory}])
+            else if (args[0].elements[1]?.type === "ObjectExpression") register(args[0].elements[1], true);
             else if (turboModules(args[0].elements, 1, found)) found.forEach(([id, fn]) => addFactory(id, fn, true));
         }
         if (isFunction(f)) register(args[0]); // webpack 4's bootstrap: (function (modules) {...})([...])
@@ -616,6 +618,14 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     // webpack 5.112 wraps a CommonJS module inlined into an ES module as `require.cw((module, exports) => {...})`. Runs
     // after the anchors above, so `requires` already holds every factory's require.
     for (const c of cs) if (isHelper(c.callee, "cw") && isFunction(c.arguments[0])) addFactory(`cw@${idOf(c)}`, c.arguments[0]), cw.set(c, `cw@${idOf(c)}`);
+    // Turbopack before Next.js 15.5 passes a single context object, and a factory reads its module and exports from
+    // it: `var {g: e, __dirname: a, m: t, e: i} = ctx`.
+    for (const [t, by] of declarer as Map<Node, Any>) {
+        const fac = by.type === "VariableDeclarator" && by.id.type === "ObjectPattern" && by.init?.type === "Identifier" ? ctxOf.get(refers.get(by.init)!) : undefined;
+        const key = fac && (by.id.properties as Any[]).find((p) => p.value === t && !p.computed)?.key.name;
+        if (key === "m") moduleOf.set(binding(t)!, fac!);
+        if (key === "e") exportsOf.set(binding(t)!, fac!);
+    }
 
     // Exports: each factory's keys and the value(s) behind each. `module.exports = X` is also the namespace's own value.
     const exported = new Map<Node, Map<string, Node[]>>();
@@ -638,7 +648,9 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     const exportsFrom = (fac: Node, defn: Any | null | undefined) => {
         if (defn?.type === "ObjectExpression")
             for (const p of defn.properties as Any[]) {
-                if (p.type !== "SpreadElement" && !p.computed) add(fac, p.key.type === "Identifier" ? p.key.name : lit(p.key), getterValues(p.type === "ObjectMethod" ? p : p.value));
+                // Turbopack before 15.5: `{key: getter | [getter, setter]}`
+                const g = p.type === "ObjectMethod" ? p : p.value?.type === "ArrayExpression" ? p.value.elements[0] : p.value;
+                if (p.type !== "SpreadElement" && !p.computed) add(fac, p.key.type === "Identifier" ? p.key.name : lit(p.key), getterValues(g));
             }
         else if (defn?.type === "ArrayExpression") {
             const els = defn.elements as (Any | null)[];
@@ -694,12 +706,16 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         if (target) add(target, keyOf(l), [a.right]);
     }
     for (const [fac, vs] of whole) if (!exported.get(fac)?.has("default")) add(fac, "default", vs); // what require.n / require.t read
-    // Turbopack's import(): `ctx.A(id)` calls module id's exported loader with the import function, as in
-    // `ctx.v(i => Promise.all([...chunk loads]).then(() => i(target)))`, so the loader's param is a require.
+    // Turbopack's import(): `ctx.A(id)`, or `ctx.r(id)(ctx.i)` before Next.js 15.5, calls module id's exported loader
+    // with the import function, as in `ctx.v(i => Promise.all([...chunk loads]).then(() => i(target)))`, so the
+    // loader's param is a require.
+    const loaderOf = (c: Any) =>
+        isCtx(c.callee, "A") ? lit(c.arguments[0])
+        : c.callee.type === "CallExpression" && isCtx(c.callee.callee, "r") && isCtx(c.arguments[0], "i") ? lit(c.callee.arguments[0])
+        : undefined;
     for (const c of cs)
-        if (isCtx(c.callee, "A"))
-            for (const fac of factories.get(lit(c.arguments[0])!) ?? [])
-                for (const v of whole.get(fac) ?? []) if (isFunction(v) && v.params[0]?.type === "Identifier") requires.add(binding(v.params[0])!);
+        for (const fac of factories.get(loaderOf(c)!) ?? [])
+            for (const v of whole.get(fac) ?? []) if (isFunction(v) && v.params[0]?.type === "Identifier") requires.add(binding(v.params[0])!);
 
     // Namespaces. `nsOf(e)` is the module id whose namespace `e` is: `require(id)`, `require.t(id, mode)`, a binding whose
     // one definition is one, `require.n(ns)()` (webpack 5) or `require.n(ns).a` (webpack 4), a call of a function that
@@ -761,8 +777,8 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     // or `p.then(() => require(id))`.
     const promiseNs = (p0: Any | null | undefined, seen = new Set<Node>()): string | undefined => {
         const p = follow(p0, seen);
-        if (p?.type === "CallExpression" && isCtx(p.callee, "A")) {
-            const loaders = (factories.get(lit(p.arguments[0])!) ?? []).flatMap((fac) => whole.get(fac) ?? []);
+        if (p?.type === "CallExpression" && loaderOf(p) !== undefined) {
+            const loaders = (factories.get(loaderOf(p)!) ?? []).flatMap((fac) => whole.get(fac) ?? []);
             const ids = new Set(loaders.flatMap((l) => getterValues(l)).map((r) => promiseNs(r, seen)));
             return ids.size === 1 ? [...ids][0] : undefined;
         }

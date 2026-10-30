@@ -71,3 +71,39 @@ test("files added separately aren't linked", async () => {
     expect(await h.query("MATCH ()-[e:IMPORTS]->() RETURN count(e) AS n")).toEqual([{ n: 0 }]);
     await h.close();
 });
+
+// Older Turbopack production builds (Next.js 15.3-15.5), chunks verbatim from js-recon-research
+// turbopack/cross-chunk-shapes-next15 (chunks-15.3.9, chunks-15.5.28). `safe` keys must stay clean.
+const OLD: Record<string, { files: Record<string, string>; sinks: string[] }> = {
+    // 15.3/15.4: push([script, {id: factory}]), one context param destructured as `var {m: t, e: i} = ctx`,
+    // ctx.s({name: getter}), import() as ctx.r(loader)(ctx.i); plus a hand-written [getter, setter] export
+    "next-15.3": {
+        files: {
+            "page.js": `(globalThis.TURBOPACK=globalThis.TURBOPACK||[]).push(["object"==typeof document?document.currentScript:void 0,{74323:e=>{"use strict";var{g:t,__dirname:n}=e;{function a(){return window.name}e.s({default:()=>o,getPayload:()=>a,payload:()=>t});let t=window.name;function o(){return window.name}}},55198:e=>{"use strict";var{g:t,__dirname:n}=e;e.s({default:()=>r});var a=e.i(31636),o=e.i(38653),i=e.i(74323);function r(){return(0,o.useEffect)(()=>{console.log("payload length",(0,i.getPayload)().length),e.r(60718)(e.i).then(e=>e.render())},[]),(0,a.jsx)("div",{id:"output"})}},60718:e=>{var{g:t,__dirname:n}=e;e.v(t=>Promise.all(["static/chunks/e06dfd80e3460c85.js"].map(t=>e.l(t))).then(()=>t(50742)))}}]);`,
+            "sink.js": `(globalThis.TURBOPACK=globalThis.TURBOPACK||[]).push(["object"==typeof document?document.currentScript:void 0,{38443:function(e){var{g:n,__dirname:r,m:t,e:i}=e;t.exports=function(){return window.name}},66743:e=>{"use strict";var{g:n,__dirname:r}=e;e.s({}),e.i(74323)},39997:e=>{"use strict";var{g:n,__dirname:r}=e;e.s({}),e.i(74323),e.i(66743)},69121:e=>{"use strict";var{g:n,__dirname:r}=e;e.s({reexported:()=>t.getPayload});var t=e.i(74323)},32424:function(e){var{g:n,__dirname:r,m:t,e:i}=e;t.exports={legacy:()=>window.name}},85140:function(e){var{g:n,__dirname:r,m:t,e:i}=e;i.named=function(){return window.name}},7705:function(e){var{g:n,__dirname:r,m:t,e:i}=e;{"use strict";let n=e.r(32424);Object.defineProperty(i,"viaDefine",{enumerable:!0,get:function(){return n.legacy}})}},49293:function(e){var{g:n,__dirname:r,m:t,e:i}=e;{let n=e.r(74323);t.exports={fromEsm:()=>n.getPayload()}}},50742:e=>{"use strict";var{g:n,__dirname:r}=e;e.s({render:()=>s});var t=e.i(74323);e.i(39997);var i=e.i(69121),a=e.i(32424),o=e.i(38443),u=e.i(85140),c=e.i(7705),l=e.i(49293);function s(){let n=document.getElementById("output");n.innerHTML=(0,t.getPayload)(),n.innerHTML+=t.payload,n.innerHTML+=(0,t.default)(),n.innerHTML+=(0,i.reexported)(),n.innerHTML+=a.default.legacy(),n.innerHTML+=(0,o.default)(),n.innerHTML+=(0,u.named)(),n.innerHTML+=(0,c.viaDefine)(),n.innerHTML+=(0,l.fromEsm)(),e.r(77326)(e.i).then(e=>{n.innerHTML+=e.lazyPayload()}),e.r(80721)(e.i).then(e=>{n.innerHTML+=e.default()}),d(n)}async function d(n){let r=await e.r(77326)(e.i);n.innerHTML+=r.lazyPayload()}},77326:e=>{var{g:n,__dirname:r}=e;e.v(n=>Promise.all(["static/chunks/893261be227c375b.js"].map(n=>e.l(n))).then(()=>n(68417)))},80721:e=>{var{g:n,__dirname:r}=e;e.v(e=>Promise.resolve().then(()=>e(38443)))}}]);`,
+            "lazy.js": `(globalThis.TURBOPACK=globalThis.TURBOPACK||[]).push(["object"==typeof document?document.currentScript:void 0,{68417:o=>{"use strict";var{g:t,__dirname:e}=o;function n(){return window.name}o.s({lazyPayload:()=>n})}}]);`,
+            "live.js": `(globalThis.TURBOPACK=globalThis.TURBOPACK||[]).push(["object"==typeof document?document.currentScript:void 0,{800:e=>{"use strict";var{g:t}=e;let v=window.name;e.s({live:[()=>v,e=>{v=e}]})},801:e=>{var n=e.i(800);document.body.innerHTML=n.live;document.body.innerHTML=n.zz}}]);`,
+        },
+        sinks: ["(0,t.getPayload)()", "t.payload", "(0,t.default)()", "(0,i.reexported)()", "a.default.legacy()", "(0,o.default)()", "(0,u.named)()", "(0,c.viaDefine)()", "(0,l.fromEsm)()", "e.lazyPayload()", "e.default()", "r.lazyPayload()", "n.live"],
+    },
+    // 15.5: the flat list and (context, module, exports) of 16.x, but ctx.s([name, getter, ...]) without value tags
+    "next-15.5": {
+        files: {
+            "page.js": `(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,94867,e=>{"use strict";function t(){return window.name}e.s(["default",()=>o,"getPayload",()=>t,"payload",()=>n]);let n=window.name;function o(){return window.name}},29918,e=>{"use strict";e.s(["default",()=>a]);var t=e.i(43476),n=e.i(71645),o=e.i(94867);function a(){return(0,n.useEffect)(()=>{console.log("payload length",(0,o.getPayload)().length),e.A(6670).then(e=>e.render())},[]),(0,t.jsx)("div",{id:"output"})}},6670,e=>{e.v(t=>Promise.all(["static/chunks/3e909bd0462966e1.js"].map(t=>e.l(t))).then(()=>t(3126)))}]);`,
+            "sink.js": `(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,57611,(e,n,t)=>{n.exports=function(){return window.name}},55944,(e,n,t)=>{n.exports={legacy:()=>window.name}},55604,(e,n,t)=>{t.named=function(){return window.name}},5305,(e,n,t)=>{"use strict";let i=e.r(55944);Object.defineProperty(t,"viaDefine",{enumerable:!0,get:function(){return i.legacy}})},43181,(e,n,t)=>{let i=e.r(94867);n.exports={fromEsm:()=>i.getPayload()}},3126,e=>{"use strict";e.s(["render",()=>l],3126);var n=e.i(94867),t=e.i(55944),i=e.i(57611),a=e.i(55604),r=e.i(5305),o=e.i(43181);function l(){let l=document.getElementById("output");l.innerHTML=(0,n.getPayload)(),l.innerHTML+=n.payload,l.innerHTML+=(0,n.default)(),l.innerHTML+=(0,n.getPayload)(),l.innerHTML+=t.default.legacy(),l.innerHTML+=(0,i.default)(),l.innerHTML+=(0,a.named)(),l.innerHTML+=(0,r.viaDefine)(),l.innerHTML+=(0,o.fromEsm)(),e.A(76398).then(e=>{l.innerHTML+=e.lazyPayload()}),e.A(33201).then(e=>{l.innerHTML+=e.default()}),u(l)}async function u(n){let t=await e.A(76398);n.innerHTML+=t.lazyPayload()}},76398,e=>{e.v(n=>Promise.all(["static/chunks/967107713baf698f.js"].map(n=>e.l(n))).then(()=>n(32641)))},33201,e=>{e.v(e=>Promise.resolve().then(()=>e(57611)))}]);`,
+            "lazy.js": `(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,32641,o=>{"use strict";function t(){return window.name}o.s(["lazyPayload",()=>t])}]);`,
+        },
+        sinks: ["(0,n.getPayload)()", "n.payload", "(0,n.default)()", "t.default.legacy()", "(0,i.default)()", "(0,a.named)()", "(0,r.viaDefine)()", "(0,o.fromEsm)()", "e.lazyPayload()", "e.default()", "t.lazyPayload()"],
+    },
+};
+
+for (const [name, { files, sinks }] of Object.entries(OLD))
+    test(`${name}: taint from window.name reaches every sink across chunks; an unknown key stays clean`, async () => {
+        const h = await taintwire.TaintGraph.open();
+        await h.addFiles(Object.entries(files).map(([filename, code]) => ({ filename, code })));
+        const rows = await h.query(
+            "MATCH (a:MemberExpression)-[:SON {key: 'property'}]->(:Identifier {name: 'name'}), p = (a)-[:FLOWS_TO|ARGUMENT_TO|RETURNS_TO* ACYCLIC 1..30]->(b), (:AssignmentExpression)-[:SON {key: 'right'}]->(b) RETURN DISTINCT b.file AS f, b.startOffset AS s, b.endOffset AS e"
+        );
+        await h.close();
+        expect([...new Set(rows.map((r) => files[r.f as string].slice(Number(r.s), Number(r.e))))].sort()).toEqual([...sinks].sort());
+    });
