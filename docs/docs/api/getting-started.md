@@ -5,6 +5,14 @@ title: Getting started
 
 # Getting started
 
+## Definitions
+
+- **taintwire** is the whole project: this library, which turns JavaScript into a graph and queries it.
+    - A **PookieGraph** is the graph taintwire generates from your code, saved as a single `.pg` file.
+        - A **PookieGraph Query** (pgq) is a `.pgq` file of queries you run on a PookieGraph. See [Query files (pgq)](pgq.md).
+
+Why these names? No reason at all.
+
 ## Requirements
 
 - Node.js 22 or later. CI tests Node 22 and 24 on Linux and macOS.
@@ -12,17 +20,13 @@ title: Getting started
 
 ## Install
 
-`@js-recon/taintwire` isn't published to npm yet. Until it is, build it from source and install the local copy:
+These docs describe the latest alpha. Install it from npm under the `alpha` tag:
 
 ```bash
-git clone https://github.com/js-recon/taintwire.git
-cd taintwire
-npm install
-npm run build
-
-# in your project
-npm install /path/to/taintwire
+npm install @js-recon/taintwire@alpha
 ```
+
+`npm install @js-recon/taintwire` installs the latest stable release, which the [0.1.1 docs](/) cover.
 
 ## Your first graph
 

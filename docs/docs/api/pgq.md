@@ -10,6 +10,8 @@ A `.pgq` file is a TypeScript module of Cypher queries, built up from two kinds 
 - A **selector** (`PGSelector`) is a set of nodes, such as "every URL read" or "every `innerHTML` write". On its own a selector isn't a finding, so query packs keep their selectors in library files and share them between rules.
 - A **rule** (`PGRule`) adds a severity and a message, and lists the selectors whose rows are its findings.
 
+Selectors describe both ends of a flow: sources, such as URL reads, and sinks, such as `innerHTML` writes. Taint flow belongs to the sink selector: its `from` names the source selectors, and it keeps only the sinks that a source value reaches. A selector can also describe something in between, such as message listeners, which another selector consumes through `uses`. The rule does no matching itself. It labels the selectors whose rows are findings, usually one sink selector with `from`, and gives them a severity and a message.
+
 taintwire loads `.pgq` files in a sandbox, validates them and runs them against a PookieGraph (`.pg`). [js-recon](https://js-recon.io) runs them with `js-recon taintwire analyze`, and [taintwire-queries](https://github.com/js-recon/taintwire-queries) is the public query pack.
 
 ## Example
@@ -75,14 +77,14 @@ interface PGRule {
 }
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `cypher` | The queries. A list runs every variant, concatenates the rows and drops duplicate `id`s. Lists are useful because every start pattern should be labelled: a string constant, for example, needs a `StringLiteral` variant and a `TemplateLiteral` variant. |
-| `uses` | `$name` in a query is the list of `id`s of that selector's rows. This is how you chain selectors: message handlers to listener functions to `event.data` reads. If any selector in `uses` has no rows, this selector has none either, and its queries don't run. |
-| `from` | Keep only the rows that a value from one of these selectors flows into. Each finding then carries the `source` row and the number of `hops`. |
-| `mode` | How `from` flows are followed. `strict` follows `FLOWS_TO`, `ARGUMENT_TO` and `RETURNS_TO` from the source node to the sink node. `lenient` also widens both ends through up to 3 wrapping expressions, such as `location.hash.slice(1)` or `el.innerHTML = tpl(x)`. `deep` (the default) repeats `lenient` for 4 rounds, which gets past opaque calls such as `new URLSearchParams(location.search).get("q")`. |
-| `maxHops` | The longest flow kept. Defaults to 8. |
-| `return` | A rule's findings: the union of these selectors' rows, without duplicates. A bare `PGCypher` counts as a selector of one query. |
+| Field     | Meaning                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cypher`  | The queries. A list runs every variant, concatenates the rows and drops duplicate `id`s. Lists are useful because every start pattern should be labelled: a string constant, for example, needs a `StringLiteral` variant and a `TemplateLiteral` variant.                                                                                                                                                      |
+| `uses`    | `$name` in a query is the list of `id`s of that selector's rows. This is how you chain selectors: message handlers to listener functions to `event.data` reads. If any selector in `uses` has no rows, this selector has none either, and its queries don't run.                                                                                                                                                |
+| `from`    | Keep only the rows that a value from one of these selectors flows into. Each finding then carries the `source` row and the number of `hops`.                                                                                                                                                                                                                                                                    |
+| `mode`    | How `from` flows are followed. `strict` follows `FLOWS_TO`, `ARGUMENT_TO` and `RETURNS_TO` from the source node to the sink node. `lenient` also widens both ends through up to 3 wrapping expressions, such as `location.hash.slice(1)` or `el.innerHTML = tpl(x)`. `deep` (the default) repeats `lenient` for 4 rounds, which gets past opaque calls such as `new URLSearchParams(location.search).get("q")`. |
+| `maxHops` | The longest flow kept. Defaults to 8.                                                                                                                                                                                                                                                                                                                                                                           |
+| `return`  | A rule's findings: the union of these selectors' rows, without duplicates. A bare `PGCypher` counts as a selector of one query.                                                                                                                                                                                                                                                                                 |
 
 Every query must `RETURN id`. A selector whose rows become findings (in `return`) or sources (in `from`) must also return `file, line, col`; one used only through `uses` can return just `id`. A missing column is a runtime error for its rule. A label with no table in the graph (an AST type that never occurs in it) gives no rows, not an error.
 
@@ -90,7 +92,7 @@ Every query must `RETURN id`. A selector whose rows become findings (in `return`
 
 - A `.pgq` file is TypeScript. Its types are stripped as in Node's [type stripping](https://nodejs.org/api/typescript.html#type-stripping), so the TypeScript-only features that would need code generation (`enum`, `namespace`, parameter properties) aren't allowed.
 - A `.pgq` file may import only other `.pgq` files from the same query pack. A pack is the nearest folder above the files that has a `package.json`. Import taintwire's types with `import type`, which is erased; a plain `import` of `@js-recon/taintwire` is rejected.
-- Helper functions are fine, for example one that builds the `StringLiteral` and `TemplateLiteral` variants of a query. What a file *exports* must be data, though: plain objects, arrays, strings, numbers and booleans. A function in an exported rule is an error. A selector object shared between rules stays one object, so it's evaluated once per run.
+- Helper functions are fine, for example one that builds the `StringLiteral` and `TemplateLiteral` variants of a query. What a file _exports_ must be data, though: plain objects, arrays, strings, numbers and booleans. A function in an exported rule is an error. A selector object shared between rules stays one object, so it's evaluated once per run.
 - `console.log` output from a pgq file goes to stderr.
 - To have editors treat `.pgq` as TypeScript, add `"files.associations": { "*.pgq": "typescript" }` to `.vscode/settings.json`.
 
