@@ -4,7 +4,11 @@ Babel/CS-MAST AST → LadybugDB graph library, published to npm as `@js-recon/ta
 
 - Build: `npm run build` (tsc → `build/`, the only directory that ships)
 - Test: `npm test` (vitest)
-- Docs: `cd docs && npx docusaurus build` (fails on broken links)
+- Docs: `cd docs && npx docusaurus build` (fails on broken links; CI's `docs` job runs it)
+
+## Docs versions
+
+`docs/docs/` is **Next** (served at `/next`): what's on `dev`, shipped in alpha/beta releases. `/` serves the latest stable release from `docs/versioned_docs/` (`lastVersion` in `docusaurus.config.ts`, listed in `docs/versions.json`). Alpha and beta releases don't snapshot. For a stable release, run `cd docs && npx docusaurus docs:version X.Y.Z` and set `lastVersion: "X.Y.Z"` before tagging. Fix old versions in `versioned_docs/version-X.Y.Z/`, not in `docs/docs/`.
 
 Branding assets live in `docs/static/img/` (`banner.png`, `logo.png`, `favicon.ico`; PNGs downscaled from the originals with `sips -Z`, favicon converted with `ffmpeg`). The README pulls the banner from `raw.githubusercontent.com/.../main/...` so it renders on npmjs.com too.
 
@@ -26,7 +30,7 @@ Bump the version or edit CHANGELOG only when the user asks for a release.
     git log <prev-tag>..HEAD --oneline | grep -E "^[a-f0-9]+ (feat|fix)"
     ```
 
-2. **Bump the version** in `package.json` and add `## X.Y.Z - YYYY-MM-DD` to the top of `CHANGELOG.md`, with `### Added` / `### Changed` / `### Fixed` (and `### Security` for vulnerability fixes). Cover every `feat`/`fix` from step 1. `version_check` fails the release unless package.json, the first CHANGELOG heading and the release tag all match.
+2. **Bump the version** in `package.json` (alpha/beta: `X.Y.Z-alpha.N`; stable: also snapshot the docs, see [Docs versions](#docs-versions)) and add `## X.Y.Z - YYYY-MM-DD` to the top of `CHANGELOG.md`, with `### Added` / `### Changed` / `### Fixed` (and `### Security` for vulnerability fixes). Cover every `feat`/`fix` from step 1. `version_check` fails the release unless package.json, the first CHANGELOG heading and the release tag all match.
 
 3. **Verify locally:** `npm ci && npm run build && npm test`. Also run `npm pack --dry-run` and check that only `build/`, `package.json`, `README.md` and `LICENSE` ship.
 

@@ -33,7 +33,7 @@ Bundlers that honor the `browser` export condition also pick this entry for a pl
 
 ### The worker script
 
-Ladybug's async WASM build runs the database in a Web Worker loaded from `lbug_wasm_worker.js` (about 24 MB). Call `setWorkerPath(url)` before the first `import()` or `TaintGraph.open()`, with a URL where your build serves that file. `@ladybugdb/wasm-core` doesn't list the file in its `exports`, so import it by path (as above) or copy it into your static assets.
+Ladybug's async WASM build runs the database in a Web Worker loaded from `lbug_wasm_worker.js` (about 24 MB). Call `setWorkerPath(url)` before the first `import()` or `PookieGraph.open()`, with a URL where your build serves that file. `@ladybugdb/wasm-core` doesn't list the file in its `exports`, so import it by path (as above) or copy it into your static assets.
 
 ### The `process` shim
 
@@ -54,4 +54,4 @@ Leave `process.versions.node` unset. cs-mast then hashes with `@noble/hashes` in
 
 ## Custom backends
 
-The Node and browser entries differ only in a small `Backend` (open a database, read a result's rows, check whether a path exists). Pass one to `TaintGraph.open(path, { backend })` to run on another Ladybug build. Both entries export `wasmBackend(lbug)`, which wraps any `@ladybugdb/wasm-core` variant; the test suite runs it on the `nodejs` variant from Node.
+The Node and browser entries differ only in a small `Backend` (open a database, read a result's rows, check whether a path exists). Pass one to `PookieGraph.open(path, { backend })` to run on another Ladybug build. Both entries export `wasmBackend(lbug)`, which wraps any `@ladybugdb/wasm-core` variant; the test suite runs it on the `nodejs` variant from Node.

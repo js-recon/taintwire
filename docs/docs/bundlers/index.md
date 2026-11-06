@@ -16,7 +16,7 @@ taintwire rebuilds those links for the bundlers below, so taint queries written 
 Load **every** `.js` file of the build in **one** [`graph.addFiles()`](../api/reference.md#graphaddfiles) call:
 
 ```ts
-const graph = await TaintGraph.open();
+const graph = await PookieGraph.open();
 await graph.addFiles(files); // [{ filename, code }, ...] for every chunk
 ```
 

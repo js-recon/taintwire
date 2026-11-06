@@ -2,7 +2,7 @@
 
 The public schema of a Taintwire graph (LadybugDB / openCypher), as produced by `src/index.ts` at the time of the
 validation in [VALIDATION_REPORT.md](VALIDATION_REPORT.md). Derived from the code and confirmed against a saved
-`.lbug` with `CALL show_tables()`, `CALL table_info()` and `CALL show_connection()`.
+`.pg` with `CALL show_tables()`, `CALL table_info()` and `CALL show_connection()`.
 
 Status tags: **stable**: structural, fully tested. **semantic**: tested and invariant-checked, with documented
 approximations. **partial**: deliberately incomplete; absence of an edge is not evidence of absence of the behaviour.
@@ -68,12 +68,12 @@ One per scope owner. Columns:
 
 ### `Source`: storage, not graph
 
-`Source(file PK, code)` stores each file's text, which `TaintGraph.code(id)` slices. It has no `type` column and no
+`Source(file PK, code)` stores each file's text, which `PookieGraph.code(id)` slices. It has no `type` column and no
 edges.
 
 ## Relationships
 
-Every relationship table exists from `TaintGraph.open()`, so `MATCH ()-[r:CALLS]->() RETURN r` on a graph with no calls
+Every relationship table exists from `PookieGraph.open()`, so `MATCH ()-[r:CALLS]->() RETURN r` on a graph with no calls
 returns zero rows. The names are exported as `RELATIONS`. There is no `CHILD` relationship.
 
 ### Structural (stable)

@@ -10,7 +10,7 @@ Everything below is exported from `@js-recon/taintwire`. TypeScript declarations
 | Export | Kind | Purpose |
 | --- | --- | --- |
 | [`import()`](#import) | function | Parse code into a new graph |
-| [`TaintGraph`](#taintgraph) | class | An open graph: add files, query, save, close |
+| [`PookieGraph`](#pookiegraph) | class | An open graph: add files, query, save, close |
 | [`Parser`](#parser) | type | `"cs-mast" \| "babel"` |
 | [`PARSER_OPTIONS`](#parser_options) | const | The `@babel/parser` options |
 | [`CS_MAST_CONFIG`](#cs_mast_config) | const | The cs-mast config used to hash every node |
@@ -20,6 +20,11 @@ Everything below is exported from `@js-recon/taintwire`. TypeScript declarations
 | [`scopeKind()`](#scopekind) | function | Low level: the kind of scope a single AST node creates |
 | [`RELATIONS`](#relations) | const | The names of every edge table, in layer order |
 | [`isRef()`](#isref) | function | Low level: whether an `Identifier` child is a lexical name lookup |
+| [`loadPgq()`](pgq.md#loadpgq) | function | Node only: evaluate `.pgq` query files in a sandbox and validate their rules |
+| [`validatePgq()`](pgq.md#validatepgq) | function | Problems with a pgq rule, or a list of them |
+| [`checkPgqCypher()`](pgq.md#checkpgqcypher) | function | The pgq queries that don't compile against a graph |
+| [`runPgq()`](pgq.md#runpgq) | function | Run pgq rules on a graph |
+| [`PGRule`, `PGSelector`, `PGCypher`, `PGSeverity`, `PgqFinding`](pgq.md#types) | types | The pgq query model |
 | [`ScopeKind`](#scopekind) | type | `"global" \| "module" \| "function" \| "block" \| "catch" \| "class" \| "static_block"` |
 
 ## `import()`
@@ -28,10 +33,10 @@ Everything below is exported from `@js-recon/taintwire`. TypeScript declarations
 function import(
     code: string,
     opts?: { filename?: string; dbPath?: string; parser?: Parser }
-): Promise<TaintGraph>;
+): Promise<PookieGraph>;
 ```
 
-Opens a graph and adds `code` to it. It's shorthand for `TaintGraph.open(dbPath, { parser })` followed by `graph.add(code, filename)`.
+Opens a graph and adds `code` to it. It's shorthand for `PookieGraph.open(dbPath, { parser })` followed by `graph.add(code, filename)`.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -41,17 +46,19 @@ Opens a graph and adds `code` to it. It's shorthand for `TaintGraph.open(dbPath,
 
 Rejects if parsing fails (see [errors](#errors)). You own the returned graph and must `close()` it.
 
-## `TaintGraph`
+## `PookieGraph`
 
-A LadybugDB-backed graph of one or more parsed files. Create one with `TaintGraph.open()` or `import()`. The constructor is private.
+A PookieGraph: a LadybugDB-backed graph of one or more parsed files, saved as a single `.pg` file. Create one with `PookieGraph.open()` or `import()`. The constructor is private.
 
-### `TaintGraph.open()`
+Before 0.2.0 this class was called `TaintGraph`. That name is still exported as a deprecated alias.
+
+### `PookieGraph.open()`
 
 ```ts
-static open(dbPath?: string, opts?: { parser?: Parser }): Promise<TaintGraph>;
+static open(dbPath?: string, opts?: { parser?: Parser; readOnly?: boolean }): Promise<PookieGraph>;
 ```
 
-Opens the database at `dbPath`, creating it if it doesn't exist. `dbPath` defaults to `":memory:"`. Opening an existing database picks up its node tables and edge tables, so later `add()` calls reuse them.
+Opens the PookieGraph at `dbPath` (by convention a `.pg` file), creating it if it doesn't exist. `dbPath` defaults to `":memory:"`. With `readOnly: true`, the file must already exist. It is opened without writing anything, so `add()` fails and several processes can read the same file. Opening an existing database picks up its node tables and edge tables, so later `add()` calls reuse them.
 
 `parser` (default `"cs-mast"`) applies to every `add()` on this handle. It isn't stored in the database: reopening a file with a different `parser` is allowed, and only affects files added from then on.
 
@@ -79,10 +86,10 @@ Names still resolve per file, as with `add()`. What `addFiles()` adds is the lin
 
 ```ts
 import { readdirSync, readFileSync } from "node:fs";
-import { TaintGraph } from "@js-recon/taintwire";
+import { PookieGraph } from "@js-recon/taintwire";
 
 const dir = "dist";
-const graph = await TaintGraph.open();
+const graph = await PookieGraph.open();
 await graph.addFiles(
     readdirSync(dir)
         .filter((f) => f.endsWith(".js"))

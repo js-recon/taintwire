@@ -47,4 +47,4 @@ The design notes called for a one-call entry point:
 taint_graph = taintwire.import(javascript)
 ```
 
-That's `taintwire.import(code)`. Everything else, such as adding files, querying, saving and resolving source, hangs off the returned `TaintGraph`.
+That's `taintwire.import(code)`. Everything else, such as adding files, querying, saving and resolving source, hangs off the returned `PookieGraph`.
