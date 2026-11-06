@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0-alpha.2 - 2026-11-06
+
+### Added
+
+- Docs: a new [PookieGraph aliases (pga)](https://taintwire.js-recon.io/next/api/pga) page. It covers the `pga` aliases (`lib/pga.pgq`) and the shared sink sets (`lib/sinks.pgq`) of the taintwire-queries pack: every alias and the Cypher it expands to, the 13 sink sets and what each one matches, and how to use them from another query pack given that the sandbox only allows imports from inside the same pack.
+
+### Changed
+
+- Docs: the pgq page's rule example now spreads a shared sink set into `cypher`. The Getting started and pgq pages define taintwire, PookieGraph and PookieGraph Query, show how to install the alpha from npm, and explain how selectors and rules divide the work.
+
+No code changes since 0.2.0-alpha.1.
+
 ## 0.2.0-alpha.1 - 2026-11-06
 
 ### Added
