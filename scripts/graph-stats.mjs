@@ -1,14 +1,14 @@
 // Print what a saved taintwire graph contains. Needs `npm run build` first.
-// Usage: npm run graph:stats -- graph.lbug
+// Usage: npm run graph:stats -- graph.pg
 import { existsSync } from "node:fs";
-import { RELATIONS, TaintGraph } from "../build/index.js";
+import { RELATIONS, PookieGraph } from "../build/index.js";
 
 const path = process.argv[2];
 if (!path || !existsSync(path)) {
-    console.error("usage: npm run graph:stats -- <file.lbug>");
+    console.error("usage: npm run graph:stats -- <file.pg>");
     process.exit(1);
 }
-const g = await TaintGraph.open(path);
+const g = await PookieGraph.open(path);
 const n = async (q) => Number((await g.query(q))[0].n);
 const table = (rows) => rows.forEach((r) => console.log(`  ${String(r.n).padStart(9)}  ${r.k}`));
 try {

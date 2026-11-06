@@ -26,7 +26,11 @@ const rows = await graph.query(
 await graph.close();
 ```
 
-Persist with `taintwire.import(code, { dbPath: "graph.lbug" })`, or write an in-memory graph out with `await graph.save("graph.lbug")` (refuses to overwrite). Reopen with `taintwire.TaintGraph.open("graph.lbug")`. The raw Ladybug handles are on `graph.db` / `graph.connection`.
+A graph is a **PookieGraph**, saved as a single `.pg` file. Persist with `taintwire.import(code, { dbPath: "graph.pg" })`, or write an in-memory graph out with `await graph.save("graph.pg")` (refuses to overwrite). Reopen with `taintwire.PookieGraph.open("graph.pg")`. Reopen a file without writing to it with `{ readOnly: true }`. The raw Ladybug handles are on `graph.db` / `graph.connection`. `TaintGraph` (the name before 0.2.0) is a deprecated alias.
+
+### Query files (pgq)
+
+`.pgq` files are TypeScript modules of Cypher selectors and rules: `loadPgq(files)` evaluates them in a sandbox, and `runPgq(graph, rules)` runs them. See [Query files (pgq)](https://taintwire.js-recon.io/next/api/pgq) and the [taintwire-queries](https://github.com/js-recon/taintwire-queries) pack.
 
 ### Browser
 
@@ -34,7 +38,7 @@ Persist with `taintwire.import(code, { dbPath: "graph.lbug" })`, or write an in-
 
 ### Parser
 
-`parser` picks how source is parsed, per graph: `taintwire.import(code, { parser })` or `TaintGraph.open(dbPath, { parser })`.
+`parser` picks how source is parsed, per graph: `taintwire.import(code, { parser })` or `PookieGraph.open(dbPath, { parser })`.
 
 - `"cs-mast"` (default): `@shriyanss/cs-mast` with every `scat` category on and every other Babel node type in `sinc` (`CS_MAST_CONFIG`), so every node gets a hash. Parses without error recovery, so malformed input throws; fall back to `"babel"` for it.
 - `"babel"`: `@babel/parser` with the same options as JS Recon (`PARSER_OPTIONS`); `hash` is null.

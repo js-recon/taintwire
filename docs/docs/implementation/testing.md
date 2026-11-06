@@ -80,4 +80,4 @@ Built bundles from the private js-recon-research corpus, covering webpack, React
 
 ## Inspecting a graph by hand
 
-`graph.save("x.lbug")` (or `dbPath`) writes a standard Ladybug 0.21 database. Any Ladybug tool of the same version can open it to browse the graph visually, for example Ladybug Explorer.
+`graph.save("x.pg")` (or `dbPath`) writes a standard Ladybug 0.21 database. Any Ladybug tool of the same version can open it to browse the graph visually, for example Ladybug Explorer.

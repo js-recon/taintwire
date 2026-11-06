@@ -47,12 +47,12 @@ source ──────────────────> Babel AST ──�
 | `isRef()` | Whether an `Identifier` child is a lexical name lookup |
 | `facts()` | A node's value flows and binding writes, before resolution |
 | `flatten()` | Iterative AST walk into rows and edges, then the resolution and call post-pass (`callables()`, `paramName()`) |
-| `TaintGraph.open()` | Opens the DB, creates `Source` and `Scope`, discovers existing tables and pairs |
-| `TaintGraph.add()` / `load()` | Parse, flatten, store source, bulk load |
+| `PookieGraph.open()` | Opens the DB, creates `Source` and `Scope`, discovers existing tables and pairs |
+| `PookieGraph.add()` / `load()` | Parse, flatten, store source, bulk load |
 | `ensureNodeTable()` / `ensureRelPair()` | Lazy DDL |
 | `batched()` | One prepared `COPY`, run per 5,000-row slice |
-| `TaintGraph.code()` | Id to source text, via the `Source` table |
-| `TaintGraph.save()` | Row-by-row copy into a new database |
+| `PookieGraph.code()` | Id to source text, via the `Source` table |
+| `PookieGraph.save()` | Row-by-row copy into a new database |
 | `importCode` (exported as `import`) | `open()` + `add()` |
 
 ## Design choices

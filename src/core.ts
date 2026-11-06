@@ -56,7 +56,7 @@ export interface LbugConnection {
 
 /** What differs between the Node and WASM builds of Ladybug. The entry point (index.ts / browser.ts) sets the default. */
 export interface Backend {
-    open(dbPath: string): { db: { close(): Promise<void> }; connection: LbugConnection };
+    open(dbPath: string, readOnly?: boolean): { db: { close(): Promise<void> }; connection: LbugConnection };
     /** Rows of the last statement of a query result. */
     rows(res: unknown): Promise<Record<string, unknown>[]>;
     exists(path: string): boolean | Promise<boolean>;
@@ -107,6 +107,8 @@ const RELS = {
     CALLS: ["candidates INT64"], // how many functions this callsite may call
     ARGUMENT_TO: ["arg_index INT64", "callsite STRING"], // the argument's position, and its CallExpression's id (`index` and `call` are Cypher keywords)
     RETURNS_TO: [],
+    IMPORTS: ["module_id STRING"], // a bundler require call -> the module factory it loads
+    EXPORTS: ["name STRING"], // a module factory -> the value it exports under `name`
 } as const;
 type Rel = keyof typeof RELS;
 /** Every relationship (edge table) a graph has, in layer order: AST, declarations, scopes, resolution, access, flow, calls. */
@@ -126,6 +128,8 @@ const DEFAULT_PAIRS: Record<Rel, [string, string]> = {
     CALLS: ["CallExpression", "FunctionDeclaration"],
     ARGUMENT_TO: ["Identifier", "Identifier"],
     RETURNS_TO: ["ReturnStatement", "CallExpression"],
+    IMPORTS: ["CallExpression", "ObjectMethod"],
+    EXPORTS: ["ObjectMethod", "Identifier"],
 };
 const relMaps = () => Object.fromEntries(Object.keys(RELS).map((r) => [r, new Map()])) as Record<Rel, Edges>;
 
@@ -145,6 +149,8 @@ type Edge = {
     candidates?: number;
     arg_index?: number;
     callsite?: string;
+    module_id?: string;
+    name?: string;
 };
 type Edges = Map<string, Edge[]>; // key: `${fromType}\0${toType}`
 type Ref = { type: string; slug_ref: string };
@@ -254,6 +260,11 @@ function scopeRow(kind: ScopeKind, owner: Node, file: string): ScopeRow {
     };
 }
 
+// Builtins whose result carries their input (arg 0 for functions, the receiver for methods), for value flow through
+// unresolved calls. Encoders (encodeURIComponent, escape) are left out on purpose: their output is safe in HTML.
+const PASS_FNS = new Set(["decodeURIComponent", "decodeURI", "unescape", "String", "Object"]);
+const PASS_METHODS = new Set(["slice", "substring", "substr", "trim", "trimStart", "trimEnd", "toLowerCase", "toUpperCase", "padStart", "padEnd", "repeat", "normalize", "replace", "replaceAll", "toString", "valueOf", "at", "concat"]);
+
 // TS nodes whose `expression` is a runtime value; every other Identifier under a TS node is type-level.
 const TS_VALUES = new Set(["TSAsExpression", "TSSatisfiesExpression", "TSNonNullExpression", "TSTypeAssertion", "TSInstantiationExpression", "TSExportAssignment"]);
 
@@ -325,6 +336,17 @@ function facts(node: Node, f: Facts) {
 
 /** Flatten a Babel AST into per-type node rows, Scope rows and per-(from,to)-type edges. */
 export function flatten(ast: Node, file: string) {
+    const { rootIds, ...rest } = flattenFiles([[ast, file]]);
+    return { rootId: rootIds[0], ...rest };
+}
+
+/**
+ * Flatten several files into one set of rows and edges. Names resolve per file as in flatten(); what links the files
+ * is the bundler's module registry (webpack 4/5 or Turbopack chunks), so a call into another chunk gets CALLS, ARGUMENT_TO and RETURNS_TO.
+ * With `parse`, each `eval("<string literal>")` is parsed and walked as code in the eval's scope, as a virtual file
+ * `<file>#eval@<offset>` listed in `evals` (webpack's `devtool: "eval"` builds put every module body in one).
+ */
+export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code: string) => Node } = {}) {
     const ids = new Map<Node, string>();
     const idOf = (n: Node) => {
         let id = ids.get(n);
@@ -354,15 +376,18 @@ export function flatten(ast: Node, file: string) {
     const f: Facts = { flows: [], stores: [], writes: [], writeOnly: new Set(), defs: [] };
     const declarer = new Map<Node, Node>(); // DECLARES target -> its declarer
     const calls: Node[] = [];
+    const members: Node[] = [];
+    const assigns: Node[] = []; // `=` assignments, for CommonJS exports
+    const evals: { filename: string; code: string }[] = [];
     const returns = new Map<Node, Node[]>(); // function -> the ReturnStatements it owns (not its nested functions')
 
     // Iterative walk: minified bundles nest deep enough to blow the JS stack.
-    // Each entry carries its parent and the scopes it sits in: `scope` for lexical bindings, `varScope` for var,
-    // and `fn`, the function that owns any `return` in it.
+    // Each entry carries its parent, the scopes it sits in (`scope` for lexical bindings, `varScope` for var,
+    // and `fn`, the function that owns any `return` in it) and its file.
     type Ctx = { scope?: string; varScope?: string; fn?: Node };
-    const stack: [Node, Node | undefined, Ctx][] = [[ast, undefined, {}]];
+    const stack: [Node, Node | undefined, Ctx, string][] = units.map(([ast, file]) => [ast, undefined, {}, file]);
     while (stack.length) {
-        const [node, parent, outer] = stack.pop()!;
+        const [node, parent, outer, file] = stack.pop()!;
         const id = idOf(node);
 
         const kind = scopeKind(node, parent);
@@ -393,13 +418,30 @@ export function flatten(ast: Node, file: string) {
                 if (!isNode(child)) return;
                 push("SON", node.type, child.type, { from: id, to: idOf(child), key: k, idx: Array.isArray(v) ? i : -1 });
                 const ctx = OUTER_KEYS.has(k) ? outer : inner;
-                stack.push([child, node, ctx]);
+                stack.push([child, node, ctx, file]);
                 if (child.type === "Identifier" && isRef(node, k)) uses.push([child, node, ctx.scope]);
             });
         }
         if (node.type === "ExportNamedDeclaration" && node.source) for (const s of node.specifiers) if (s.type === "ExportSpecifier") notRef.add(s.local);
         facts(node, f);
         if (node.type === "CallExpression" || node.type === "OptionalCallExpression") calls.push(node);
+        if (node.type === "MemberExpression") members.push(node);
+        if (node.type === "AssignmentExpression" && node.operator === "=") assigns.push(node);
+        const [src] = (node as Node & { arguments?: Node[] }).arguments ?? [];
+        if (parse && node.type === "CallExpression" && node.callee.type === "Identifier" && node.callee.name === "eval" && src?.type === "StringLiteral") {
+            let evaluated: Node | undefined;
+            try {
+                evaluated = parse(src.value);
+            } catch {
+                // not valid code: stays a string
+            }
+            if (evaluated) {
+                const filename = `${file}#eval@${node.start}`;
+                evals.push({ filename, code: src.value });
+                push("SON", node.type, evaluated.type, { from: id, to: idOf(evaluated), key: "evaluated", idx: -1 });
+                stack.push([evaluated, node, inner, filename]);
+            }
+        }
         if (node.type === "ReturnStatement" && outer.fn) (returns.get(outer.fn) ?? returns.set(outer.fn, []).get(outer.fn)!).push(node);
         // Same idOf() as SON, so DECLARES targets are the existing Identifier nodes.
         // Every DECLARES target gets its IN_SCOPE from the same declared() call, so the two can't disagree.
@@ -484,6 +526,310 @@ export function flatten(ast: Node, file: string) {
         if (selfNames.has(t) && binding(t) !== t) continue; // a shadowed function-expression name: no use reaches it
         def(binding(t), isFunction(by) && t === (by as { id?: Node | null }).id ? by : null);
     }
+
+    // Webpack's module registry (docs/bundlers/webpack.md), webpack 4 and 5. A chunk registers module factories
+    // `{id(module, exports, require) {...}}` (webpack 4 also uses arrays, id = index) by pushing `[[chunkIds], factories]`;
+    // the entry chunk keeps its own in `__webpack_modules__` or passes them to the bootstrap IIFE. ES modules export with
+    // `require.d(exports, {key: getter})`, `require.d(exports, [key, 0, value, ...])` or `require.d(exports, "key", getter)`;
+    // CommonJS ones assign `module.exports` / `exports.key`. An import is a namespace expression (`require(id)`,
+    // `require.n(ns)()`, an `import()` callback's param, ...), and `ns.key` reads the exported value, in whichever file it
+    // is: `imported()` resolves it for leaves() (so calls resolve) and FLOWS_TO.
+    // ponytail: `require.n(ns)` of an ES module (which reads ns.default) is taken as `ns`, as for CommonJS; and nsOf()
+    // re-walks alias chains per query, so memoise it if a bundle with long chains gets slow.
+    type Any = Node & Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const lit = (n: Node | null | undefined) => (n?.type === "NumericLiteral" || n?.type === "StringLiteral" ? String(n.value) : undefined);
+    // A member's static key: `o.k` or `o["k"]`.
+    const keyOf = (m: Any) => (m.computed ? lit(m.property) : m.property.type === "Identifier" ? m.property.name : undefined);
+    const factories = new Map<string, Node[]>(); // module id -> its factories (two builds in one graph can reuse an id)
+    const requires = new Set<Node>(); // require-function bindings: each factory's third param, and the runtime's function
+    const moduleOf = new Map<Node, Node>(); // a factory's `module` binding -> the factory
+    const exportsOf = new Map<Node, Node>(); // a factory's `exports` binding -> the factory
+    const ctxOf = new Map<Node, Node>(); // a Turbopack factory's context binding -> the factory
+    // webpack factories take (module, exports, require), Turbopack's (context, module, exports).
+    const addFactory = (id: string, fn: Any, turbo = false) => {
+        (factories.get(id) ?? factories.set(id, []).get(id)!).push(fn);
+        const ps = (fn.params as Node[]).map((p) => (p?.type === "Identifier" ? binding(p) : undefined));
+        if (turbo && ps[0]) ctxOf.set(ps[0], fn);
+        const [mod, exp, req] = turbo ? [ps[1], ps[2]] : ps;
+        if (mod) moduleOf.set(mod, fn);
+        if (exp) exportsOf.set(exp, fn);
+        if (req) requires.add(req);
+    };
+    const register = (o: Any | null | undefined, turbo = false) => {
+        const found: [string, Any][] = [];
+        if (o?.type === "ObjectExpression")
+            for (const p of o.properties as Any[]) {
+                const fn = p.type === "ObjectMethod" ? p : p.value;
+                const id = p.computed ? undefined : lit(p.key);
+                if (p.type === "SpreadElement" || !isFunction(fn) || id === undefined) return;
+                found.push([id, fn]);
+            }
+        else if (o?.type === "ArrayExpression")
+            for (const [i, fn] of (o.elements as Any[]).entries()) {
+                if (fn === null) continue; // a hole: no module with that id in this chunk
+                if (!isFunction(fn)) return;
+                found.push([String(i), fn]);
+            }
+        found.forEach(([id, fn]) => addFactory(id, fn, turbo));
+    };
+    // Turbopack (docs/bundlers/turbopack.md): `push([script, [group]?, id, id..., factory, ...])`, where a group is the
+    // same list, and each factory is installed under the ids before it. False (nothing registered) for any other array.
+    const turboModules = (els: Any[], at: number, out: [string, Any][]): boolean => {
+        if (els[at]?.type === "ArrayExpression") {
+            if (!turboModules(els[at].elements, 0, out)) return false;
+            at++;
+        }
+        let pending: string[] = [];
+        for (const e of els.slice(at)) {
+            if (isFunction(e) && pending.length) pending.forEach((id) => out.push([id, e])), (pending = []);
+            else if (lit(e) !== undefined) pending.push(lit(e)!);
+            else return false;
+        }
+        return !pending.length;
+    };
+    const isReq = (e: Any | null | undefined) => e?.type === "Identifier" && requires.has(refers.get(e)!);
+    const isHelper = (e: Any | null | undefined, name: string) => e?.type === "MemberExpression" && keyOf(e) === name && isReq(e.object);
+    // `ctx.name` on a Turbopack factory's context: `ctx.i(id)` imports, `ctx.s([...])` exports, ...
+    const isCtx = (e: Any | null | undefined, name: string) =>
+        e?.type === "MemberExpression" && keyOf(e) === name && e.object.type === "Identifier" && ctxOf.has(refers.get(e.object)!);
+    const cs = calls as Any[];
+    const cw = new Map<Node, string>(); // `require.cw(body)` call -> the module id given to its body
+    for (const c of cs) {
+        const { callee: f, arguments: args } = c;
+        // (self.webpackChunk_x ||= []).push([[chunkIds], factories, runtime?])
+        if (f.type === "MemberExpression" && !f.computed && f.property.name === "push" && args[0]?.type === "ArrayExpression") {
+            const found: [string, Any][] = [];
+            if (args[0].elements[0]?.type === "ArrayExpression") register(args[0].elements[1]);
+            // Turbopack before Next.js 15.5: push([script, {id: factory}])
+            else if (args[0].elements[1]?.type === "ObjectExpression") register(args[0].elements[1], true);
+            else if (turboModules(args[0].elements, 1, found)) found.forEach(([id, fn]) => addFactory(id, fn, true));
+        }
+        if (isFunction(f)) register(args[0]); // webpack 4's bootstrap: (function (modules) {...})([...])
+        // The runtime's `function __webpack_require__(id)` runs `modules[id](module, module.exports, __webpack_require__)`,
+        // or `modules[id].call(module.exports, module, module.exports, __webpack_require__)` in webpack 4.
+        const viaCall = f.type === "MemberExpression" && !f.computed && f.property.name === "call";
+        const target = viaCall ? f.object : f;
+        const req = viaCall ? (args.length === 4 ? args[3] : undefined) : args.length === 3 ? args[2] : undefined;
+        const fn = req?.type === "Identifier" ? (declarer.get(refers.get(req)!) as Any | undefined) : undefined;
+        if (fn?.type === "FunctionDeclaration" && fn.params.length === 1 && target.type === "MemberExpression" && target.computed && refers.get(target.property) === binding(fn.params[0]))
+            requires.add(refers.get(req)!);
+    }
+    for (const [t, by] of declarer) if (by.type === "VariableDeclarator" && by.id === t) register(by.init); // __webpack_modules__
+    // webpack 5.112 wraps a CommonJS module inlined into an ES module as `require.cw((module, exports) => {...})`. Runs
+    // after the anchors above, so `requires` already holds every factory's require.
+    for (const c of cs) if (isHelper(c.callee, "cw") && isFunction(c.arguments[0])) addFactory(`cw@${idOf(c)}`, c.arguments[0]), cw.set(c, `cw@${idOf(c)}`);
+    // Turbopack before Next.js 15.5 passes a single context object, and a factory reads its module and exports from
+    // it: `var {g: e, __dirname: a, m: t, e: i} = ctx`.
+    for (const [t, by] of declarer as Map<Node, Any>) {
+        const fac = by.type === "VariableDeclarator" && by.id.type === "ObjectPattern" && by.init?.type === "Identifier" ? ctxOf.get(refers.get(by.init)!) : undefined;
+        const key = fac && (by.id.properties as Any[]).find((p) => p.value === t && !p.computed)?.key.name;
+        if (key === "m") moduleOf.set(binding(t)!, fac!);
+        if (key === "e") exportsOf.set(binding(t)!, fac!);
+    }
+
+    // Exports: each factory's keys and the value(s) behind each. `module.exports = X` is also the namespace's own value.
+    const exported = new Map<Node, Map<string, Node[]>>();
+    const whole = new Map<Node, Node[]>();
+    const getterValues = (g: Any | null | undefined): Node[] =>
+        !g || !isFunction(g) ? [] : g.body.type === "BlockStatement" ? (returns.get(g) ?? []).flatMap((r: Any) => r.argument ?? []) : [g.body];
+    const add = (fac: Node, key: string | undefined, vs: Node[]) => {
+        if (key === undefined) return;
+        const keys = exported.get(fac) ?? exported.set(fac, new Map()).get(fac)!;
+        for (const v of vs) {
+            (keys.get(key) ?? keys.set(key, []).get(key)!).push(v);
+            edge("EXPORTS", fac, v, { name: key });
+        }
+    };
+    const bound = (e: Any | null | undefined, to: Map<Node, Node>) => (e?.type === "Identifier" ? to.get(refers.get(e)!) : undefined);
+    // `module.exports` of a factory, or its `exports` param: the factory.
+    const exportsObj = (e: Any | null | undefined) =>
+        bound(e, exportsOf) ?? (e?.type === "MemberExpression" && keyOf(e) === "exports" ? bound(e.object, moduleOf) : undefined);
+    // `{key: getter}`, or `[key, 0, value | key, getter, setter?, ...]` (webpack 5.112's require.d and Turbopack's ctx.s)
+    const exportsFrom = (fac: Node, defn: Any | null | undefined) => {
+        if (defn?.type === "ObjectExpression")
+            for (const p of defn.properties as Any[]) {
+                // Turbopack before 15.5: `{key: getter | [getter, setter]}`
+                const g = p.type === "ObjectMethod" ? p : p.value?.type === "ArrayExpression" ? p.value.elements[0] : p.value;
+                if (p.type !== "SpreadElement" && !p.computed) add(fac, p.key.type === "Identifier" ? p.key.name : lit(p.key), getterValues(g));
+            }
+        else if (defn?.type === "ArrayExpression") {
+            const els = defn.elements as (Any | null)[];
+            for (let i = 0; i < els.length; ) {
+                const key = lit(els[i++]);
+                const b = els[i++];
+                add(fac, key, b?.type === "NumericLiteral" && b.value === 0 ? [els[i++]].filter((v): v is Any => !!v) : getterValues(b));
+                if (isFunction(els[i])) i++; // Turbopack: a setter after the getter
+            }
+        }
+    };
+    const nsAlias = new Map<Node, Node[]>(); // Turbopack `ctx.n(ns)`: the factory's namespace is ns
+    for (const c of cs) {
+        const { callee: f, arguments: [e, defn, getter] } = c;
+        if (isHelper(f, "d")) {
+            const fac = bound(e, exportsOf);
+            if (!fac) continue;
+            if (defn?.type === "ObjectExpression" || defn?.type === "ArrayExpression") exportsFrom(fac, defn);
+            else add(fac, lit(defn), getterValues(getter)); // webpack 4: require.d(exports, "key", getter)
+        }
+        // Turbopack: ctx.s(bindings, id?), ctx.v(value, id?) (module.exports = value), ctx.n(ns, id?). `id` is
+        // another module's when the code of several is merged into one factory.
+        if (isCtx(f, "s") || isCtx(f, "v") || isCtx(f, "n")) {
+            const k = keyOf(f);
+            const facs = lit(defn) !== undefined ? (factories.get(lit(defn)!) ?? []) : [ctxOf.get(refers.get(f.object)!)!];
+            for (const fac of e ? facs : []) {
+                if (k === "s") exportsFrom(fac, e);
+                else (k === "v" ? (whole.get(fac) ?? whole.set(fac, []).get(fac)!) : (nsAlias.get(fac) ?? nsAlias.set(fac, []).get(fac)!)).push(e);
+            }
+        }
+        // Object.defineProperty(exports, "key", { value } | { get }), as TypeScript and Babel emit for CommonJS
+        if (f.type === "MemberExpression" && keyOf(f) === "defineProperty" && f.object.name === "Object" && !refers.has(f.object) && defn && defn.value !== "__esModule") {
+            const fac = exportsObj(e);
+            for (const p of fac && getter?.type === "ObjectExpression" ? (getter.properties as Any[]) : []) {
+                const k = p.type === "SpreadElement" || p.computed ? undefined : p.key.name ?? lit(p.key);
+                if (k === "value") add(fac!, lit(defn), [p.value]);
+                if (k === "get") add(fac!, lit(defn), getterValues(p.type === "ObjectMethod" ? p : p.value));
+            }
+        }
+    }
+    for (const a of assigns as Any[]) {
+        const l = a.left;
+        if (l.type !== "MemberExpression") continue;
+        const fac = keyOf(l) === "exports" ? bound(l.object, moduleOf) : undefined;
+        if (fac) {
+            // module.exports = X; an object literal's own keys are named exports too
+            (whole.get(fac) ?? whole.set(fac, []).get(fac)!).push(a.right);
+            for (const p of a.right.type === "ObjectExpression" ? (a.right.properties as Any[]) : [])
+                if (p.type !== "SpreadElement" && !p.computed) add(fac, p.key.name ?? lit(p.key), [p.type === "ObjectMethod" ? p : p.value]);
+            continue;
+        }
+        const target = exportsObj(l.object); // exports.key = v, module.exports.key = v
+        if (target) add(target, keyOf(l), [a.right]);
+    }
+    for (const [fac, vs] of whole) if (!exported.get(fac)?.has("default")) add(fac, "default", vs); // what require.n / require.t read
+    // Turbopack's import(): `ctx.A(id)`, or `ctx.r(id)(ctx.i)` before Next.js 15.5, calls module id's exported loader
+    // with the import function, as in `ctx.v(i => Promise.all([...chunk loads]).then(() => i(target)))`, so the
+    // loader's param is a require.
+    const loaderOf = (c: Any) =>
+        isCtx(c.callee, "A") ? lit(c.arguments[0])
+        : c.callee.type === "CallExpression" && isCtx(c.callee.callee, "r") && isCtx(c.arguments[0], "i") ? lit(c.callee.arguments[0])
+        : undefined;
+    for (const c of cs)
+        for (const fac of factories.get(loaderOf(c)!) ?? [])
+            for (const v of whole.get(fac) ?? []) if (isFunction(v) && v.params[0]?.type === "Identifier") requires.add(binding(v.params[0])!);
+
+    // Namespaces. `nsOf(e)` is the module id whose namespace `e` is: `require(id)`, `require.t(id, mode)`, a binding whose
+    // one definition is one, `require.n(ns)()` (webpack 5) or `require.n(ns).a` (webpack 4), a call of a function that
+    // returns one (`a = () => require(1)`, `require.cw(body)`), `await` of an import() promise, or an import() callback's param.
+    const paramNs = new Map<Node, string>();
+    const single = (e: Any) => {
+        const d = refers.get(e);
+        const vs = d && defs.get(d);
+        return vs?.length === 1 ? vs[0] : undefined;
+    };
+    // Through aliases (`b = a`) and sequences to the expression that gives a value, iteratively: alias chains in bundles
+    // can be long. Stops at a namespace param, which has no definition to follow.
+    const follow = (e: Any | null | undefined, seen: Set<Node>): Any | null | undefined => {
+        while (e && !seen.has(e) && (e.type === "SequenceExpression" || (e.type === "Identifier" && !paramNs.has(refers.get(e)!)))) {
+            seen.add(e);
+            e = e.type === "SequenceExpression" ? e.expressions.at(-1) : single(e);
+        }
+        return e;
+    };
+    const nsOf = (e0: Any | null | undefined, seen = new Set<Node>()): string | undefined => {
+        if (!requires.size && !ctxOf.size) return; // no webpack or Turbopack runtime in these files
+        const e = follow(e0, seen);
+        if (!e || seen.has(e)) return;
+        seen.add(e);
+        switch (e.type) {
+            case "Identifier":
+                return paramNs.get(refers.get(e)!);
+            case "AwaitExpression":
+                return promiseNs(e.argument, seen);
+            case "CallExpression":
+                if (isReq(e.callee) && e.arguments.length === 1) return lit(e.arguments[0]);
+                if (isCtx(e.callee, "i") || isCtx(e.callee, "r")) return lit(e.arguments[0]); // Turbopack import / require
+                if (isHelper(e.callee, "t") && Number(lit(e.arguments[1])) & 1) return lit(e.arguments[0]); // mode & 1: require it
+                return returnedNs(e.callee, seen);
+            case "MemberExpression":
+                if (keyOf(e) === "a") return interopNs(e.object, seen);
+                if (keyOf(e) !== "default") return;
+                // `ns.default` of a CommonJS module is module.exports, read like the namespace itself (Turbopack's
+                // `ctx.i(cjs).default.k`); left to `imported()` for an ES module's own default.
+                const id = nsOf(e.object, seen);
+                return id !== undefined && (factories.get(id) ?? []).some((fac) => whole.has(fac)) ? id : undefined;
+        }
+    };
+    // The namespace calling `g` returns.
+    const returnedNs = (g0: Any | null | undefined, seen: Set<Node>): string | undefined => {
+        const g = follow(g0, seen);
+        if (!g || seen.has(g)) return;
+        seen.add(g);
+        if (g.type === "CallExpression") return cw.get(g) ?? interopNs(g, seen);
+        const ids = new Set(getterValues(g).map((v) => nsOf(v, seen)));
+        return ids.size === 1 ? [...ids][0] : undefined;
+    };
+    // `require.n(ns)`'s getter, which returns `ns` for a CommonJS module.
+    const interopNs = (g0: Any | null | undefined, seen: Set<Node>): string | undefined => {
+        const g = follow(g0, seen);
+        return g?.type === "CallExpression" && isHelper(g.callee, "n") ? nsOf(g.arguments[0], seen) : undefined;
+    };
+    // The namespace an import() promise resolves to: `p.then(require.bind(_, id))`, `p.then(require.t.bind(_, id, mode))`
+    // or `p.then(() => require(id))`.
+    const promiseNs = (p0: Any | null | undefined, seen = new Set<Node>()): string | undefined => {
+        const p = follow(p0, seen);
+        if (p?.type === "CallExpression" && loaderOf(p) !== undefined) {
+            const loaders = (factories.get(loaderOf(p)!) ?? []).flatMap((fac) => whole.get(fac) ?? []);
+            const ids = new Set(loaders.flatMap((l) => getterValues(l)).map((r) => promiseNs(r, seen)));
+            return ids.size === 1 ? [...ids][0] : undefined;
+        }
+        if (p?.type !== "CallExpression" || p.callee.type !== "MemberExpression" || keyOf(p.callee) !== "then") return;
+        const cb = p.arguments[0] as Any | undefined;
+        if (cb?.type === "CallExpression" && cb.callee.type === "MemberExpression" && keyOf(cb.callee) === "bind") {
+            const o = cb.callee.object;
+            if (isReq(o) || (isHelper(o, "t") && Number(lit(cb.arguments[2])) & 1)) return lit(cb.arguments[1]);
+            return;
+        }
+        return returnedNs(cb, seen);
+    };
+    for (const c of cs) {
+        // An import() callback's first param is the namespace, unless something else is assigned to it.
+        const cb = c.callee.type === "MemberExpression" && keyOf(c.callee) === "then" ? (c.arguments[0] as Any | undefined) : undefined;
+        const p = cb && isFunction(cb) && cb.params[0]?.type === "Identifier" ? binding(cb.params[0]) : undefined;
+        const id = p && defs.get(p)?.length === 1 ? promiseNs(c.callee.object) : undefined;
+        if (id !== undefined) paramNs.set(p!, id);
+    }
+    // IMPORTS: each call that loads a module, synchronously or for an import().
+    for (const c of cs) {
+        const { callee: f, arguments: args } = c;
+        const id = isReq(f) && args.length === 1 ? lit(args[0])
+            : isCtx(f, "i") || isCtx(f, "r") || isCtx(f, "A") ? lit(args[0])
+            : isHelper(f, "t") ? lit(args[0])
+            : f.type === "MemberExpression" && keyOf(f) === "bind" && (isReq(f.object) || isHelper(f.object, "t")) ? lit(args[1])
+            : undefined;
+        for (const fac of id === undefined ? [] : factories.get(id) ?? []) edge("IMPORTS", c, fac, { module_id: id });
+    }
+    // A factory's own exports, or those of the namespace(s) Turbopack's `ctx.n(ns)` made its namespace.
+    const valuesOf = (id: string | undefined, key: string, seen = new Set<string>()): Node[] => {
+        if (id === undefined || seen.has(id)) return [];
+        seen.add(id);
+        return (factories.get(id) ?? []).flatMap((fac) => exported.get(fac)?.get(key) ?? (nsAlias.get(fac) ?? []).flatMap((ns) => valuesOf(nsOf(ns), key, seen)));
+    };
+    // The value(s) `ns.key` / `ns["key"]` reads, or undefined if `ns` isn't a namespace or doesn't export `key`.
+    const imported = (m: Any): Node[] | undefined => {
+        const key = keyOf(m);
+        const vs = key === undefined ? [] : valuesOf(nsOf(m.object), key);
+        return vs.length ? vs : undefined;
+    };
+    // A namespace expression's own value: a CommonJS module's `module.exports`.
+    const nsValue = (e: Node) => {
+        const id = nsOf(e);
+        return id === undefined ? undefined : (factories.get(id) ?? []).flatMap((fac) => whole.get(fac) ?? []);
+    };
+    for (const m of members) {
+        for (const v of imported(m) ?? []) edge("FLOWS_TO", v, m);
+        if (keyOf(m) === "a") for (const v of nsValue(m) ?? []) edge("FLOWS_TO", v, m);
+    }
+    for (const c of cs) for (const v of nsValue(c) ?? []) edge("FLOWS_TO", v, c);
     // The functions a value may be, or null if any part of it is unknown. Flow-insensitive like FLOWS_TO: every
     // definition of a binding counts, in any order. `leaves()` reads one value: the functions it is directly, whether
     // any part is unknown, and the bindings it aliases. Explicit stacks throughout: alias chains in bundles can be long.
@@ -491,9 +837,22 @@ export function flatten(ast: Node, file: string) {
     const leaves = (roots: (Node | null | undefined)[]): Leaves => {
         const out: Leaves = { fns: new Set(), unknown: false, deps: [] };
         const st = [...roots];
+        const seen = new Set<Node>(); // re-exports can form a cycle
         while (st.length) {
             const v = st.pop();
             switch (v?.type) {
+                case "MemberExpression":
+                case "CallExpression":
+                case "AwaitExpression": {
+                    if (seen.has(v)) break;
+                    seen.add(v);
+                    // `ns.key`, a namespace's own value (`require(1)()`, `require.n(ns)()`), or webpack 4's `Object(ns.key)`
+                    const obj = v.type === "CallExpression" && v.callee.type === "Identifier" && v.callee.name === "Object" && !refers.has(v.callee) && v.arguments.length === 1;
+                    const vs = obj ? [v.arguments[0] as Node] : (v.type === "MemberExpression" && imported(v)) || nsValue(v);
+                    if (vs?.length) st.push(...vs);
+                    else out.unknown = true;
+                    break;
+                }
                 case "FunctionDeclaration":
                 case "FunctionExpression":
                 case "ArrowFunctionExpression":
@@ -592,12 +951,25 @@ export function flatten(ast: Node, file: string) {
         }
         return r;
     };
+    // An unresolved builtin that returns (part of) its input: decodeURIComponent(x) and x.slice(1) get FLOWS_TO into the call.
+    // ponytail: by name only, with no idea of the receiver's type; a typed builtin model can replace it.
+    const passThrough = (c: Any) => {
+        const f = c.callee;
+        if (f.type === "Identifier" && PASS_FNS.has(f.name) && !refers.has(f) && c.arguments[0]) edge("FLOWS_TO", c.arguments[0], c);
+        if (f.type === "MemberExpression" && PASS_METHODS.has(keyOf(f)!)) {
+            edge("FLOWS_TO", f.object, c);
+            if (keyOf(f) === "concat") for (const a of c.arguments) if (a.type !== "SpreadElement") edge("FLOWS_TO", a, c);
+        }
+    };
     // The binding a formal parameter declares, if it's a plain name (destructured params need element/property flow).
     const paramName = (p: Node): Node | undefined =>
         p.type === "Identifier" ? p : p.type === "AssignmentPattern" ? paramName(p.left) : p.type === "TSParameterProperty" ? paramName(p.parameter) : p.type === "RestElement" ? paramName(p.argument) : undefined;
     for (const c of calls as (Node & { callee: Node; arguments: Node[] })[]) {
         const targets = callables(c.callee);
-        if (!targets?.size) continue; // unresolved: a global, a param, a member, a call result, ...
+        if (!targets?.size) {
+            passThrough(c); // unresolved: a global, a param, a member, a call result, ...
+            continue;
+        }
         for (const fn of targets as Set<Node & { params: Node[]; body: Node; async?: boolean; generator?: boolean }>) {
             edge("CALLS", c, fn, { candidates: targets.size });
             // Arguments by position; a rest param takes every argument from its position on. After a spread, positions are unknown.
@@ -615,11 +987,11 @@ export function flatten(ast: Node, file: string) {
             if (fn.type === "ArrowFunctionExpression" && fn.body.type !== "BlockStatement") edge("RETURNS_TO", fn.body, c); // concise body
         }
     }
-    return { rootId: idOf(ast), nodes, scopes, rels };
+    return { rootIds: units.map(([ast]) => idOf(ast)), nodes, scopes, rels, evals };
 }
 
-/** A LadybugDB-backed graph of one or more parsed JS files. */
-export class TaintGraph {
+/** A PookieGraph: a LadybugDB-backed graph of one or more parsed JS files, saved as a single `.pg` file. */
+export class PookieGraph {
     private constructor(
         readonly db: { close(): Promise<void> },
         readonly connection: LbugConnection,
@@ -632,17 +1004,23 @@ export class TaintGraph {
     // ponytail: unbounded per-file source cache for code(); add LRU eviction if graphs outgrow memory.
     private readonly sources = new Map<string, string>();
 
-    /** Open (or create) a graph. Defaults to in-memory; pass a path to persist. `parser` applies to add(). */
+    /**
+     * Open (or create) a graph. Defaults to in-memory; pass a path (`.pg`) to persist. `parser` applies to add().
+     * `readOnly` opens an existing file without writing to it (no schema setup, no WAL); add() then fails.
+     */
     static async open(
         dbPath = ":memory:",
-        { parser = "cs-mast", backend = defaultBackend }: { parser?: Parser; backend?: Backend } = {}
-    ): Promise<TaintGraph> {
-        const { db, connection } = backend.open(dbPath);
+        { parser = "cs-mast", backend = defaultBackend, readOnly = false }: { parser?: Parser; backend?: Backend; readOnly?: boolean } = {}
+    ): Promise<PookieGraph> {
+        if (readOnly && !(await backend.exists(dbPath))) throw new Error(`taintwire: no PookieGraph at ${dbPath}`);
+        const { db, connection } = backend.open(dbPath, readOnly);
         const relPairs = Object.fromEntries(Object.keys(RELS).map((r) => [r, new Set()])) as Record<Rel, Set<string>>;
-        const g = new TaintGraph(db, connection, new Set(), relPairs, parser, backend);
+        const g = new PookieGraph(db, connection, new Set(), relPairs, parser, backend);
         // Each file's source is stored once; node code is sliced from it by offset (see code()).
-        await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SOURCE}(file STRING PRIMARY KEY, code STRING)`);
-        await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SCOPE}(${Object.entries(SCOPE_COLUMNS).map(([c, t]) => `${c} ${t}`).join(", ")})`);
+        if (!readOnly) {
+            await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SOURCE}(file STRING PRIMARY KEY, code STRING)`);
+            await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SCOPE}(${Object.entries(SCOPE_COLUMNS).map(([c, t]) => `${c} ${t}`).join(", ")})`);
+        }
         for (const t of await g.query("CALL show_tables() RETURN name, type")) {
             if (t.type === "NODE" && t.name !== SOURCE && t.name !== SCOPE) g.tables.add(t.name as string);
             if (t.type === "REL" && (t.name as string) in RELS) {
@@ -651,7 +1029,7 @@ export class TaintGraph {
             }
         }
         for (const [rel, [from, to]] of Object.entries(DEFAULT_PAIRS) as [Rel, [string, string]][]) {
-            if (g.relPairs[rel].size) continue;
+            if (readOnly || g.relPairs[rel].size) continue;
             await g.ensureNodeTable(from);
             await g.ensureNodeTable(to);
             await g.ensureRelPair(rel, from, to);
@@ -661,11 +1039,20 @@ export class TaintGraph {
 
     /** Parse `code` and load its AST into the graph. Returns the id of the File node. */
     async add(code: string, filename = "input.js"): Promise<string> {
-        const { rootId, nodes, scopes, rels } = flatten(parseAst(code, this.parser), filename);
-        // Source first: a duplicate filename fails on the primary key before any nodes are loaded.
-        await this.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, { file: filename, code });
+        return (await this.addFiles([{ code, filename }]))[0];
+    }
+
+    /**
+     * Parse and load several files together, such as every chunk of a bundle, so that references between them
+     * (a webpack module registry) resolve. Files loaded by separate calls aren't linked. Returns the File node ids, in order.
+     */
+    async addFiles(files: { code: string; filename: string }[]): Promise<string[]> {
+        const parse = (code: string) => parseAst(code, this.parser);
+        const { rootIds, nodes, scopes, rels, evals } = flattenFiles(files.map((f) => [parse(f.code), f.filename]), { parse });
+        // Sources first: a duplicate filename fails on the primary key before any nodes are loaded.
+        for (const f of [...files, ...evals]) await this.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, { file: f.filename, code: f.code });
         await this.load(nodes, scopes, rels);
-        return rootId;
+        return rootIds;
     }
 
     /** The source code of the node with this id. */
@@ -685,7 +1072,7 @@ export class TaintGraph {
     }
 
     /**
-     * Write the whole graph to a new LadybugDB file at `dbPath`.
+     * Write the whole graph to a new PookieGraph file (`.pg`, a LadybugDB database) at `dbPath`.
      * Copies rows itself: Ladybug's EXPORT DATABASE rejects a rel table with multiple FROM/TO pairs.
      */
     async save(dbPath: string): Promise<void> {
@@ -703,7 +1090,7 @@ export class TaintGraph {
             }
         const scopes = (await this.query(`MATCH (s:${SCOPE}) RETURN ${Object.keys(SCOPE_COLUMNS).map((c) => `s.${c} AS ${c}`).join(", ")}`)) as ScopeRow[];
         const sources = await this.query(`MATCH (s:${SOURCE}) RETURN s.file AS file, s.code AS code`);
-        const out = await TaintGraph.open(dbPath, { backend: this.backend });
+        const out = await PookieGraph.open(dbPath, { backend: this.backend });
         try {
             // One COPY per (rel, from, to) pair; checkpointing after each made save() ~4x slower.
             await out.query("CALL auto_checkpoint=false");
@@ -772,11 +1159,16 @@ export class TaintGraph {
     }
 }
 
-async function importCode(code: string, opts: { filename?: string; dbPath?: string; parser?: Parser } = {}): Promise<TaintGraph> {
-    const graph = await TaintGraph.open(opts.dbPath, { parser: opts.parser });
+async function importCode(code: string, opts: { filename?: string; dbPath?: string; parser?: Parser } = {}): Promise<PookieGraph> {
+    const graph = await PookieGraph.open(opts.dbPath, { parser: opts.parser });
     await graph.add(code, opts.filename);
     return graph;
 }
+
+/** @deprecated Renamed to {@link PookieGraph}. */
+export const TaintGraph = PookieGraph;
+/** @deprecated Renamed to {@link PookieGraph}. */
+export type TaintGraph = PookieGraph;
 
 // `taintwire.import(code)` per LIBRARY.md; `import` is reserved as a binding name, not as an export name.
 export { importCode as import };

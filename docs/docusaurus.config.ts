@@ -5,7 +5,7 @@ const config: Config = {
     title: "taintwire",
     tagline: "Graph-based AST and taint analysis for JavaScript",
 
-    favicon: "img/favicon.png",
+    favicon: "img/favicon.ico",
 
     url: "https://taintwire.js-recon.io",
     baseUrl: "/",
@@ -25,6 +25,9 @@ const config: Config = {
                     routeBasePath: "/",
                     sidebarPath: "./sidebars.ts",
                     editUrl: "https://github.com/js-recon/taintwire/edit/main/docs/",
+                    // `/` is the latest stable release (versions.json); `/next` is dev, shipped in alpha/beta releases.
+                    lastVersion: "0.1.1",
+                    versions: { current: { label: "Next", path: "next", banner: "unreleased" } },
                 },
                 blog: false,
             } satisfies Preset.Options,
@@ -39,6 +42,9 @@ const config: Config = {
             items: [
                 { type: "docSidebar", sidebarId: "apiSidebar", position: "left", label: "API" },
                 { type: "docSidebar", sidebarId: "implementationSidebar", position: "left", label: "Implementation" },
+                { type: "docSidebar", sidebarId: "bundlersSidebar", position: "left", label: "Bundler support" },
+                { href: "https://taintwire-explorer.pages.dev", label: "Explorer", position: "left" },
+                { type: "docsVersionDropdown", position: "right" },
                 { href: "https://github.com/js-recon/taintwire", label: "GitHub", position: "right" },
             ],
         },

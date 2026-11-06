@@ -17,7 +17,7 @@ Choose the parser per graph handle:
 
 ```js
 await taintwire.import(code, { parser: "babel" });
-await taintwire.TaintGraph.open("graph.lbug", { parser: "babel" });
+await taintwire.PookieGraph.open("graph.pg", { parser: "babel" });
 ```
 
 Every `add()` on that handle uses it. The choice isn't stored in the database, so a graph on disk can contain files from both parsers. Files added with `babel` just have `null` hashes.
@@ -49,6 +49,6 @@ async function importAny(code, filename) {
 }
 ```
 
-A handle's parser can't be changed once it's open. To add a file that failed to a graph on disk, `close()` the graph, reopen it with `TaintGraph.open(dbPath, { parser: "babel" })`, then `add()` the file. An in-memory graph can't be reopened, so build it on disk (`dbPath`) if you expect to need this.
+A handle's parser can't be changed once it's open. To add a file that failed to a graph on disk, `close()` the graph, reopen it with `PookieGraph.open(dbPath, { parser: "babel" })`, then `add()` the file. An in-memory graph can't be reopened, so build it on disk (`dbPath`) if you expect to need this.
 
 With `babel`, `@babel/parser` still throws on input it can't recover from. That error is passed through unchanged.

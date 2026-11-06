@@ -47,9 +47,9 @@ const CASES: [string, string[]][] = [
     ["({ a, b } = o); [c] = d; o.p = 1;", []],
 ];
 
-let g: taintwire.TaintGraph;
+let g: taintwire.PookieGraph;
 beforeAll(async () => {
-    g = await taintwire.TaintGraph.open();
+    g = await taintwire.PookieGraph.open();
     for (const [i, [src]] of CASES.entries()) await g.add(src, `case${i}.js`);
 });
 afterAll(() => g.close());
@@ -94,8 +94,8 @@ test("DECLARES survives save() and reopen", async () => {
     const count = "MATCH ()-[e:DECLARES]->() RETURN count(e) AS n";
     try {
         const before = await g.query(count);
-        await g.save(join(dir, "d.lbug"));
-        const saved = await taintwire.TaintGraph.open(join(dir, "d.lbug"));
+        await g.save(join(dir, "d.pg"));
+        const saved = await taintwire.PookieGraph.open(join(dir, "d.pg"));
         expect(await saved.query(count)).toEqual(before);
         await saved.add("let late;", "late.js"); // reuses the reopened DECLARES table
         expect(await saved.query("MATCH (a {file: 'late.js'})-[:DECLARES]->(i) RETURN i.name AS n")).toEqual([{ n: "late" }]);

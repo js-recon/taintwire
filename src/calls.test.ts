@@ -72,9 +72,9 @@ const SRC: Record<string, string> = {
 };
 const file = (name: string) => `${name}.${name === "thisParam" ? "ts" : "js"}`;
 
-let g: taintwire.TaintGraph;
+let g: taintwire.PookieGraph;
 beforeAll(async () => {
-    g = await taintwire.TaintGraph.open();
+    g = await taintwire.PookieGraph.open();
     for (const [name, src] of Object.entries(SRC)) await g.add(src, file(name));
 });
 afterAll(() => g.close());
@@ -278,10 +278,9 @@ test("demo: location.search through pass() into eval()", async () => {
     expect(p.rels).toEqual(["ARGUMENT_TO", "FLOWS_TO", "FLOWS_TO", "RETURNS_TO", "FLOWS_TO", "FLOWS_TO"]);
 });
 
-test("demo: x.trim() is a member call, so the path stops at x (no fake member-call flow)", async () => {
+test("demo: x.trim() is an unresolved builtin string method, so its receiver flows through it to the sink", async () => {
     expect(await flows("demoTrim", "location.search", "x")).toBe(true); // through q and the argument
-    expect(await flows("demoTrim", "location.search", "cleanish")).toBe(false);
-    // with a resolvable function the same sink is reached: see demoEval
+    expect(await flows("demoTrim", "location.search", "cleanish")).toBe(true); // x.trim() passes x through, then RETURNS_TO
 });
 
 test("regression: alias cycles share their definitions", async () => {
@@ -312,8 +311,8 @@ test("no duplicate call edges; save() and reopen keep them; babel builds the sam
     const q = "MATCH (a)-[e:CALLS|ARGUMENT_TO|RETURNS_TO]->(b) RETURN label(e) AS rel, count(*) AS n ORDER BY rel";
     const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
     try {
-        await g.save(join(dir, "c.lbug"));
-        const saved = await taintwire.TaintGraph.open(join(dir, "c.lbug"));
+        await g.save(join(dir, "c.pg"));
+        const saved = await taintwire.PookieGraph.open(join(dir, "c.pg"));
         expect(await saved.query(q)).toEqual(await g.query(q));
         await saved.close();
     } finally {
@@ -321,8 +320,8 @@ test("no duplicate call edges; save() and reopen keep them; babel builds the sam
     }
     const pos =
         "MATCH (a)-[e:CALLS|ARGUMENT_TO|RETURNS_TO]->(b) RETURN label(e) AS rel, a.file AS f, a.startOffset AS s, b.startOffset AS t ORDER BY rel, f, s, t";
-    const babel = await taintwire.TaintGraph.open(":memory:", { parser: "babel" });
-    const again = await taintwire.TaintGraph.open();
+    const babel = await taintwire.PookieGraph.open(":memory:", { parser: "babel" });
+    const again = await taintwire.PookieGraph.open();
     for (const [name, src] of Object.entries(SRC))
         await Promise.all([babel.add(src, file(name)), again.add(src, file(name))]);
     expect(await babel.query(pos)).toEqual(await g.query(pos));
@@ -331,7 +330,7 @@ test("no duplicate call edges; save() and reopen keep them; babel builds the sam
 });
 
 test("call edges over the fixtures and every case: each edge is consistent with CALLS", async () => {
-    const h = await taintwire.TaintGraph.open();
+    const h = await taintwire.PookieGraph.open();
     for (const f of ["modern.js", "webpack-vue.js", "component.tsx"])
         await h.add(readFileSync(new URL(`../test/${f}`, import.meta.url), "utf-8"), f);
     for (const [name, src] of Object.entries(SRC)) await h.add(src, file(name)); // the fixtures alone resolve few calls

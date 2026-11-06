@@ -8,7 +8,7 @@ sidebar_label: Introduction
 
 ![taintwire](/img/banner.png)
 
-taintwire parses JavaScript into a Babel AST and loads it into an embedded [LadybugDB](https://ladybugdb.com/) graph, where you query it with openCypher. Every AST node becomes a graph node labelled with its Babel type, and every parent-to-child link becomes an edge. With the default parser, every node also gets a [CS-MAST-S](https://cs-mast.ss0x00.com) structural hash.
+taintwire parses JavaScript into a Babel AST and loads it into an embedded [LadybugDB](https://ladybugdb.com/) graph, a **PookieGraph**, saved as a single `.pg` file. You query it with openCypher, either directly or through reusable [query files (pgq)](api/pgq.md). Every AST node becomes a graph node labelled with its Babel type, and every parent-to-child link becomes an edge. With the default parser, every node also gets a [CS-MAST-S](https://cs-mast.ss0x00.com) structural hash.
 
 ```js
 import * as taintwire from "@js-recon/taintwire";
@@ -25,7 +25,7 @@ await graph.close();
 
 :::caution Research stage
 
-taintwire is pre-1.0 and not yet on npm. The API and graph schema will change before it replaces the [JS Recon](https://github.com/js-recon/js-recon) taint engine. So far, the graph has:
+taintwire is pre-1.0. The API and graph schema will change before it replaces the [JS Recon](https://github.com/js-recon/js-recon) taint engine. So far, the graph has:
 
 - AST containment (`SON`)
 - binding declarations (`DECLARES`)
@@ -34,8 +34,9 @@ taintwire is pre-1.0 and not yet on npm. The API and graph schema will change be
 - access classification (`READS`, `WRITES`)
 - intra-procedural value flow (`FLOWS_TO`)
 - a static call graph with argument and return flow (`CALLS`, `ARGUMENT_TO`, `RETURNS_TO`)
+- cross-chunk module links for webpack and Turbopack builds (`IMPORTS`, `EXPORTS`)
 
-Property and heap flow, module recovery, control flow and taint rules aren't in yet. See the [roadmap](implementation/roadmap.md).
+Property and heap flow and control flow aren't in yet. See the [roadmap](implementation/roadmap.md).
 
 :::
 

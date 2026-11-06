@@ -13,7 +13,7 @@ const COUNTS = "MATCH ()-[e]->() RETURN label(e) AS rel, count(*) AS n ORDER BY 
 
 test("the WASM backend builds the same graph as the native one", async () => {
     const native = await taintwire.import(SRC);
-    const graph = await taintwire.TaintGraph.open(":memory:", { backend });
+    const graph = await taintwire.PookieGraph.open(":memory:", { backend });
     await graph.add(SRC);
     const norm = (rows: Record<string, unknown>[]) => rows.map((r) => ({ rel: r.rel, n: Number(r.n) }));
     const counts = norm(await graph.query(COUNTS));

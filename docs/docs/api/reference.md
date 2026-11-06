@@ -10,15 +10,21 @@ Everything below is exported from `@js-recon/taintwire`. TypeScript declarations
 | Export | Kind | Purpose |
 | --- | --- | --- |
 | [`import()`](#import) | function | Parse code into a new graph |
-| [`TaintGraph`](#taintgraph) | class | An open graph: add files, query, save, close |
+| [`PookieGraph`](#pookiegraph) | class | An open graph: add files, query, save, close |
 | [`Parser`](#parser) | type | `"cs-mast" \| "babel"` |
 | [`PARSER_OPTIONS`](#parser_options) | const | The `@babel/parser` options |
 | [`CS_MAST_CONFIG`](#cs_mast_config) | const | The cs-mast config used to hash every node |
 | [`flatten()`](#flatten) | function | Low level: AST to node rows, scope rows and edges, without a database |
+| [`flattenFiles()`](#flattenfiles) | function | Low level: `flatten()` for several files at once, linked through a bundler's module registry |
 | [`declared()`](#declared) | function | Low level: the identifiers a single AST node declares |
 | [`scopeKind()`](#scopekind) | function | Low level: the kind of scope a single AST node creates |
 | [`RELATIONS`](#relations) | const | The names of every edge table, in layer order |
 | [`isRef()`](#isref) | function | Low level: whether an `Identifier` child is a lexical name lookup |
+| [`loadPgq()`](pgq.md#loadpgq) | function | Node only: evaluate `.pgq` query files in a sandbox and validate their rules |
+| [`validatePgq()`](pgq.md#validatepgq) | function | Problems with a pgq rule, or a list of them |
+| [`checkPgqCypher()`](pgq.md#checkpgqcypher) | function | The pgq queries that don't compile against a graph |
+| [`runPgq()`](pgq.md#runpgq) | function | Run pgq rules on a graph |
+| [`PGRule`, `PGSelector`, `PGCypher`, `PGSeverity`, `PgqFinding`](pgq.md#types) | types | The pgq query model |
 | [`ScopeKind`](#scopekind) | type | `"global" \| "module" \| "function" \| "block" \| "catch" \| "class" \| "static_block"` |
 
 ## `import()`
@@ -27,10 +33,10 @@ Everything below is exported from `@js-recon/taintwire`. TypeScript declarations
 function import(
     code: string,
     opts?: { filename?: string; dbPath?: string; parser?: Parser }
-): Promise<TaintGraph>;
+): Promise<PookieGraph>;
 ```
 
-Opens a graph and adds `code` to it. It's shorthand for `TaintGraph.open(dbPath, { parser })` followed by `graph.add(code, filename)`.
+Opens a graph and adds `code` to it. It's shorthand for `PookieGraph.open(dbPath, { parser })` followed by `graph.add(code, filename)`.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -40,17 +46,19 @@ Opens a graph and adds `code` to it. It's shorthand for `TaintGraph.open(dbPath,
 
 Rejects if parsing fails (see [errors](#errors)). You own the returned graph and must `close()` it.
 
-## `TaintGraph`
+## `PookieGraph`
 
-A LadybugDB-backed graph of one or more parsed files. Create one with `TaintGraph.open()` or `import()`. The constructor is private.
+A PookieGraph: a LadybugDB-backed graph of one or more parsed files, saved as a single `.pg` file. Create one with `PookieGraph.open()` or `import()`. The constructor is private.
 
-### `TaintGraph.open()`
+Before 0.2.0 this class was called `TaintGraph`. That name is still exported as a deprecated alias.
+
+### `PookieGraph.open()`
 
 ```ts
-static open(dbPath?: string, opts?: { parser?: Parser }): Promise<TaintGraph>;
+static open(dbPath?: string, opts?: { parser?: Parser; readOnly?: boolean }): Promise<PookieGraph>;
 ```
 
-Opens the database at `dbPath`, creating it if it doesn't exist. `dbPath` defaults to `":memory:"`. Opening an existing database picks up its node tables and edge tables, so later `add()` calls reuse them.
+Opens the PookieGraph at `dbPath` (by convention a `.pg` file), creating it if it doesn't exist. `dbPath` defaults to `":memory:"`. With `readOnly: true`, the file must already exist. It is opened without writing anything, so `add()` fails and several processes can read the same file. Opening an existing database picks up its node tables and edge tables, so later `add()` calls reuse them.
 
 `parser` (default `"cs-mast"`) applies to every `add()` on this handle. It isn't stored in the database: reopening a file with a different `parser` is allowed, and only affects files added from then on.
 
@@ -63,6 +71,35 @@ add(code: string, filename?: string): Promise<string>;
 Parses `code` and loads its AST into the graph. Returns the `id` of the new `File` node. `filename` defaults to `"input.js"`.
 
 Rejects if `filename` is already in the graph. That check runs before any AST nodes are written.
+
+`add()` is `addFiles([{ code, filename }])`. Files added by separate `add()` calls aren't linked to each other: use `addFiles()` for the chunks of one bundle.
+
+### `graph.addFiles()`
+
+```ts
+addFiles(files: { code: string; filename: string }[]): Promise<string[]>;
+```
+
+Parses every file and loads them as one unit. Returns the `File` node ids, in the same order as `files`.
+
+Names still resolve per file, as with `add()`. What `addFiles()` adds is the link between files that a bundler's runtime makes. For a webpack 4 or 5 or a Turbopack build, a call or value read through the module registry resolves to the function or value in the chunk that defines it, so value paths cross chunks. Load every `.js` file of a build directory in one call. See [Bundler support](../bundlers/index.md).
+
+```ts
+import { readdirSync, readFileSync } from "node:fs";
+import { PookieGraph } from "@js-recon/taintwire";
+
+const dir = "dist";
+const graph = await PookieGraph.open();
+await graph.addFiles(
+    readdirSync(dir)
+        .filter((f) => f.endsWith(".js"))
+        .map((f) => ({ filename: f, code: readFileSync(`${dir}/${f}`, "utf8") }))
+);
+```
+
+Each `eval("<string literal>")` in the files is parsed with the graph's parser and stored as a virtual file `<file>#eval@<offset>`, with its own `Source` row, so `code(id)` works on its nodes. This applies to `add()` too. See [webpack: eval builds](../bundlers/webpack.md#eval-builds).
+
+Rejects if any `filename` is already in the graph or appears twice in `files`.
 
 ### `graph.query()`
 
@@ -157,13 +194,30 @@ function flatten(ast: Node, file: string): {
     rels: Record<
         | "SON" | "DECLARES" | "CREATES_SCOPE" | "PARENT_SCOPE" | "IN_SCOPE"
         | "REFERS_TO" | "READS" | "WRITES" | "FLOWS_TO"
-        | "CALLS" | "ARGUMENT_TO" | "RETURNS_TO",
+        | "CALLS" | "ARGUMENT_TO" | "RETURNS_TO" | "IMPORTS" | "EXPORTS",
         Map<string, Edge[]>
     >;
 };
 ```
 
 Turns a Babel AST into the rows `add()` loads, with no database involved: node rows grouped by node type, `Scope` rows, and edges grouped by `"<fromType>\0<toType>"`. Scope edges use `"Scope"` as the type on their scope end. `REFERS_TO`, `READS`, `WRITES`, `FLOWS_TO`, `CALLS`, `ARGUMENT_TO` and `RETURNS_TO` are resolved within this one file, after the walk. Exported for testing and research, and likely to change.
+
+## `flattenFiles()`
+
+```ts
+function flattenFiles(
+    units: [ast: Node, file: string][],
+    opts?: { parse?: (code: string) => Node }
+): {
+    rootIds: string[];
+    nodes: Map<string, Row[]>;
+    scopes: ScopeRow[];
+    rels: Record<Relation, Map<string, Edge[]>>; // as flatten()
+    evals: { filename: string; code: string }[];
+};
+```
+
+What `addFiles()` loads. The same as `flatten()`, but for several files, with one `rootId` per unit, in order. Each file keeps its own scopes, and the [webpack](../bundlers/webpack.md#how-it-works) / [Turbopack](../bundlers/turbopack.md#how-it-works) registry pass links them. With `parse`, each `eval("<string literal>")` is parsed and walked in the eval's scope, and listed in `evals` as a virtual file (`addFiles()` stores their `Source` rows). Without it, eval strings stay strings. `flatten(ast, file)` is `flattenFiles([[ast, file]])`. Exported for testing and research, and likely to change.
 
 ## `declared()`
 
@@ -185,7 +239,7 @@ Returns the kind of `Scope` that `node` creates, or `null` if it creates none. `
 ## `RELATIONS`
 
 ```ts
-const RELATIONS: readonly ["SON", "DECLARES", "CREATES_SCOPE", "PARENT_SCOPE", "IN_SCOPE", "REFERS_TO", "READS", "WRITES", "FLOWS_TO", "CALLS", "ARGUMENT_TO", "RETURNS_TO"];
+const RELATIONS: readonly ["SON", "DECLARES", "CREATES_SCOPE", "PARENT_SCOPE", "IN_SCOPE", "REFERS_TO", "READS", "WRITES", "FLOWS_TO", "CALLS", "ARGUMENT_TO", "RETURNS_TO", "IMPORTS", "EXPORTS"];
 ```
 
 The edge tables every graph has, from the moment it's opened. Querying any of them on a graph with no such edges returns no rows. The names are stable. See [Graph model](graph-model.md#edges).

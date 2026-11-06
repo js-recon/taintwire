@@ -32,10 +32,10 @@ test("imports webpack chunk as AST graph", async () => {
 
 test("persists to disk and adds more files after reopening", async () => {
     const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
-    const dbPath = join(dir, "graph.lbug");
+    const dbPath = join(dir, "graph.pg");
     try {
         await (await taintwire.import(code, { filename: "a.js", dbPath })).close();
-        const g = await taintwire.TaintGraph.open(dbPath);
+        const g = await taintwire.PookieGraph.open(dbPath);
         await g.add("fetch(location.hash)", "b.js"); // reuses existing tables/SON pairs, adds new ones
         const files = await g.query("MATCH (f:File) RETURN f.file AS file ORDER BY file");
         expect(files.map((r) => r.file)).toEqual(["a.js", "b.js"]);
@@ -47,7 +47,7 @@ test("persists to disk and adds more files after reopening", async () => {
 
 test("save() writes an in-memory graph to a LadybugDB file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
-    const dbPath = join(dir, "saved.lbug");
+    const dbPath = join(dir, "saved.pg");
     const count = "MATCH (n) WITH count(n) AS n MATCH ()-[e:SON]->() RETURN n, count(e) AS e";
     try {
         const g = await taintwire.import(code, { filename: "app.js" });
@@ -56,7 +56,7 @@ test("save() writes an in-memory graph to a LadybugDB file", async () => {
         await expect(g.save(dbPath)).rejects.toThrow(/refusing to overwrite/);
         await g.close();
 
-        const saved = await taintwire.TaintGraph.open(dbPath);
+        const saved = await taintwire.PookieGraph.open(dbPath);
         expect(await saved.query(count)).toEqual(before);
         const [si] = await saved.query("MATCH (c:CallExpression)-[:SON {key: 'callee'}]->(:Identifier {name: 'setInterval'}) RETURN c.line AS line");
         expect(si.line).toBe(30);
@@ -77,10 +77,10 @@ test("code() resolves a node id to its source, across save()", async () => {
         await expect(g.code("CallExpression_nope")).rejects.toThrow(/no node/);
         await expect(g.add("x", "c.js")).rejects.toThrow();
 
-        const dbPath = join(dir, "c.lbug");
+        const dbPath = join(dir, "c.pg");
         await g.save(dbPath);
         await g.close();
-        const saved = await taintwire.TaintGraph.open(dbPath);
+        const saved = await taintwire.PookieGraph.open(dbPath);
         expect(await saved.code(callId as string)).toBe("fetch(location.hash)");
         await saved.close();
     } finally {
@@ -138,15 +138,15 @@ test("cs-mast parse errors point at the babel parser, which recovers", async () 
 
 test("every edge table exists from open(), so an empty relation is zero rows, not a binder error", async () => {
     const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
-    const rels = ["SON", "DECLARES", "CREATES_SCOPE", "PARENT_SCOPE", "IN_SCOPE", "REFERS_TO", "READS", "WRITES", "FLOWS_TO", "CALLS", "ARGUMENT_TO", "RETURNS_TO"];
+    const rels = ["SON", "DECLARES", "CREATES_SCOPE", "PARENT_SCOPE", "IN_SCOPE", "REFERS_TO", "READS", "WRITES", "FLOWS_TO", "CALLS", "ARGUMENT_TO", "RETURNS_TO", "IMPORTS", "EXPORTS"];
     expect(taintwire.RELATIONS).toEqual(rels); // the exported list is the stable set of names
-    const counts = async (g: taintwire.TaintGraph) => {
+    const counts = async (g: taintwire.PookieGraph) => {
         const out: Record<string, unknown> = {};
         for (const r of rels) out[r] = (await g.query(`MATCH ()-[e:${r}]->() RETURN count(e) AS n`))[0].n;
         return out;
     };
     try {
-        const empty = await taintwire.TaintGraph.open();
+        const empty = await taintwire.PookieGraph.open();
         expect(await counts(empty)).toEqual(Object.fromEntries(rels.map((r) => [r, 0])));
         await empty.close();
         // nothing here resolves, reads, writes or flows into a binding
@@ -155,9 +155,9 @@ test("every edge table exists from open(), so an empty relation is zero rows, no
         const c = await counts(g);
         expect([c.REFERS_TO, c.READS, c.WRITES, c.DECLARES, c.IN_SCOPE]).toEqual([0, 0, 0, 0, 0]);
         // the tables survive save() and a reopen, and still take new pairs
-        await g.save(join(dir, "g.lbug"));
+        await g.save(join(dir, "g.pg"));
         await g.close();
-        const reopened = await taintwire.TaintGraph.open(join(dir, "g.lbug"));
+        const reopened = await taintwire.PookieGraph.open(join(dir, "g.pg"));
         expect(await counts(reopened)).toEqual(c);
         await reopened.add("const a = 1; a;", "late.js");
         expect((await reopened.query("MATCH (s)-[:READS]->(:Identifier) RETURN s.type AS s"))).toEqual([{ s: "ExpressionStatement" }]);

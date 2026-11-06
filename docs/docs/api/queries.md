@@ -155,7 +155,7 @@ RETURN properties(nodes(p), 'type') AS path, properties(nodes(p), 'line') AS lin
 // path: [MemberExpression, Identifier h (decl), Identifier h, BinaryExpression, Identifier u (decl), Identifier u]
 ```
 
-`FLOWS_TO` stops at unresolved calls and property reads. `fetch(location.hash.slice(1))` has no path, because the `.slice(1)` call is opaque. See [Value flow: Deferred](../implementation/value-flow.md#deferred).
+`FLOWS_TO` stops at unresolved calls and property reads, except for a short list of string [builtins](../implementation/value-flow.md#builtins): `fetch(decodeURIComponent(location.hash.slice(1)))` has a path, but `fetch(parse(location.hash))` with an unknown `parse` doesn't. See [Value flow: Deferred](../implementation/value-flow.md#deferred).
 
 ### Across functions
 

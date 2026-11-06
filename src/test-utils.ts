@@ -1,11 +1,11 @@
 // Test helpers shared by the semantic suites. Not part of the build (see tsconfig.json).
-import type { TaintGraph } from "./index.js";
+import type { PookieGraph } from "./index.js";
 
 /**
  * Every `rel` edge starting in `file`, as sorted "a -> b" strings: Identifiers as `name`, or `name:decl` for a
  * DECLARES target, and other nodes as `Type(code)`, sliced from `src`.
  */
-export async function edgeList(g: TaintGraph, file: string, src: string, rel: string): Promise<string[]> {
+export async function edgeList(g: PookieGraph, file: string, src: string, rel: string): Promise<string[]> {
     const decls = new Set(
         (await g.query("MATCH ()-[:DECLARES]->(i:Identifier) WHERE i.file = $f RETURN i.id AS id", { f: file })).map(
             (r) => r.id
@@ -24,7 +24,7 @@ export async function edgeList(g: TaintGraph, file: string, src: string, rel: st
 
 /** Whether a value path (FLOWS_TO, ARGUMENT_TO, RETURNS_TO; cycle-safe) runs from a node with code `from` to one with code `to`. */
 export async function reaches(
-    g: TaintGraph,
+    g: PookieGraph,
     file: string,
     src: string,
     from: string,

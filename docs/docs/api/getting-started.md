@@ -53,7 +53,7 @@ await graph.close();
 `import` is a reserved word, so you can't write `import { import } from ...`. Use a namespace import as above, or rename it:
 
 ```js
-import { import as importCode, TaintGraph } from "@js-recon/taintwire";
+import { import as importCode, PookieGraph } from "@js-recon/taintwire";
 ```
 
 ## More than one file
@@ -73,18 +73,18 @@ await graph.query("MATCH (f:File) RETURN f.file AS file");
 Graphs are in-memory by default. There are two ways to get one onto disk:
 
 ```js
-// 1. Build straight into a LadybugDB file.
-const graph = await taintwire.import(code, { dbPath: "graph.lbug" });
+// 1. Build straight into a PookieGraph file (.pg, a LadybugDB database).
+const graph = await taintwire.import(code, { dbPath: "graph.pg" });
 
 // 2. Build in memory, then write a copy out. Refuses to overwrite an existing path.
 const mem = await taintwire.import(code);
-await mem.save("graph.lbug");
+await mem.save("graph.pg");
 ```
 
-Reopen a saved graph with `TaintGraph.open()`. You can keep adding files to it:
+Reopen a saved graph with `PookieGraph.open()`. You can keep adding files to it:
 
 ```js
-const graph = await taintwire.TaintGraph.open("graph.lbug");
+const graph = await taintwire.PookieGraph.open("graph.pg");
 await graph.add(moreCode, "late-chunk.js");
 ```
 
@@ -95,4 +95,5 @@ The file is a standard LadybugDB 0.21 database, so other Ladybug tools of the sa
 - [API reference](reference.md): every export and method.
 - [Graph model](graph-model.md): the node tables, columns and edges you query.
 - [Query cookbook](queries.md): working queries and the Cypher gotchas specific to this graph.
+- [Query files (pgq)](pgq.md): reusable selectors and rules in `.pgq` files, run with `runPgq()`.
 - [Parsers](parsers.md): `cs-mast` against `babel`, and what to do when parsing fails.
