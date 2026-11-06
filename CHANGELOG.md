@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.0-alpha.1 - 2026-11-06
+
+### Added
+
+- **PookieGraph queries (pgq).** A `.pgq` file is a TypeScript module of Cypher selectors (`PGSelector`) and rules (`PGRule`, with a severity of `info`, `low`, `medium`, `high` or `critical`). Selectors chain through `uses` (`$name` parameters) and follow taint flow with `from` (strict, lenient or deep, plus `maxHops`).
+    - `loadPgq(files)` evaluates `.pgq` files in a sandboxed Node process. The process runs under the permission model and can read only its query pack. It can import only other `.pgq` files, and `fetch`, `getBuiltinModule` and `kill` are removed. Needs Node 22.15 or newer.
+    - `validatePgq()` checks rules, and `checkPgqCypher()` compiles their queries against a graph.
+    - `runPgq(graph, rules)` runs rules and returns findings with their source and hop count. Its flow runner comes from js-recon's analyze engine.
+- `PookieGraph.open(path, { readOnly: true })` opens a saved graph without writing to it.
+- `graph.addFiles()` and `flattenFiles()` load several files as one unit, linked through the bundler's module registry, with the new `IMPORTS` and `EXPORTS` edges. Supported registries:
+    - webpack 5 (`push` and `__webpack_modules__` factories, `R.d` exports, `R(id)` namespaces)
+    - webpack 4 (module arrays, the IIFE registry)
+    - CommonJS (`module.exports`, `exports.k`) with `require.n/.t` interop
+    - `import()`
+    - `eval("<literal>")` builds, parsed as virtual files
+    - Turbopack from Next.js 15.3 to 16.x
+- Builtin pass-through `FLOWS_TO` edges for decoders and string methods (`decodeURIComponent`, `slice`, `trim`, `concat`, ...). Encoders get none.
+- Versioned docs: `/` serves the latest stable release, and `/next` serves the docs for alpha and beta releases.
+
+### Changed
+
+- The graph is now called a **PookieGraph**, and `.pg` is its file extension. `TaintGraph` was renamed to `PookieGraph`; `TaintGraph` remains as a deprecated alias.
+
 ## 0.1.1 - 2026-10-07
 
 ### Added
