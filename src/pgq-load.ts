@@ -1,6 +1,6 @@
 // Node-only: evaluate .pgq files (TypeScript modules) in a sandboxed child process and validate their rules.
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import * as nodeModule from "node:module";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,8 +61,10 @@ export async function loadPgq(
     if (typeof nodeModule.registerHooks !== "function" || typeof nodeModule.stripTypeScriptTypes !== "function")
         throw new Error(`taintwire: loading .pgq files needs Node 22.15 or newer (this is ${process.version})`);
     if (!files.length) return { rules: [], errors: [] };
-    const abs = files.map((f) => resolve(f));
-    const base = resolve(root ?? packRoot(commonDir(abs)));
+    // Real paths: Node resolves module URLs through symlinks (macOS /var -> /private/var), so the root must match.
+    const abs = files.map((f) => realpathSync(resolve(f)));
+    const shown = new Map(abs.map((a, i) => [a, files[i]])); // messages name files as the caller did
+    const base = realpathSync(resolve(root ?? packRoot(commonDir(abs))));
     const args = [
         "--permission",
         `--allow-fs-read=${base}`,
@@ -85,7 +87,8 @@ export async function loadPgq(
     const rules: PGRule[] = [];
     const errors: string[] = [];
     const owner = new Map<string, string>();
-    for (const { file, value, error } of results) {
+    for (const { file: real, value, error } of results) {
+        const file = shown.get(real) ?? real;
         if (error) {
             errors.push(`${file}: ${error}`);
             continue;
