@@ -32,21 +32,37 @@ RETURN n.id AS id, p.name AS kind, ${AT}`,
 };
 ```
 
-A rule file (`rules/dom_xss_url.pgq`) default-exports a rule, or a list of rules:
+A rule file (`rules/dom_xss_url.pgq`) default-exports a rule, or a list of rules. Here the sink queries come from a shared sink set, and the rule adds one query of its own:
 
 ```ts
 import type { PGRule } from "@js-recon/taintwire";
 import { urlRead } from "../lib/sources.pgq";
-import { htmlAssign, htmlCall } from "../lib/sinks.pgq";
+import { htmlSinks } from "../lib/sinks.pgq";
 
 export default {
     id: "dom_xss_url",
     name: "DOM XSS: URL value written as HTML",
     severity: "high",
     message: "URL value reaches an HTML sink",
-    return: [{ cypher: [htmlAssign, htmlCall], from: urlRead, mode: "deep", maxHops: 8 }],
+    return: [
+        {
+            from: urlRead,
+            mode: "deep",
+            maxHops: 8,
+            cypher: [
+                ...htmlSinks,
+                {
+                    query: `MATCH (c:CallExpression)-[:SON {key: 'callee'}]->(:MemberExpression)-[:SON {key: 'property'}]->(p:Identifier), (c)-[a:SON {key: 'arguments'}]->(n)
+WHERE p.name = 'insertAdjacentHTML' AND a.idx = 1
+RETURN n.id AS id, p.name AS kind, n.file AS file, n.line AS line, n.col AS col`,
+                },
+            ],
+        },
+    ],
 } satisfies PGRule;
 ```
+
+The taintwire-queries pack writes these fragments with short aliases instead, such as `${pga.methodCall()}` and `${pga.ret("p.name")}`, and keeps its shared sink sets in `lib/sinks.pgq`. [PookieGraph aliases (pga)](./pga.md) lists them.
 
 ## Types
 
@@ -92,7 +108,7 @@ Every query must `RETURN id`. A selector whose rows become findings (in `return`
 
 - A `.pgq` file is TypeScript. Its types are stripped as in Node's [type stripping](https://nodejs.org/api/typescript.html#type-stripping), so the TypeScript-only features that would need code generation (`enum`, `namespace`, parameter properties) aren't allowed.
 - A `.pgq` file may import only other `.pgq` files from the same query pack. A pack is the nearest folder above the files that has a `package.json`. Import taintwire's types with `import type`, which is erased; a plain `import` of `@js-recon/taintwire` is rejected.
-- Helper functions are fine, for example one that builds the `StringLiteral` and `TemplateLiteral` variants of a query. What a file _exports_ must be data, though: plain objects, arrays, strings, numbers and booleans. A function in an exported rule is an error. A selector object shared between rules stays one object, so it's evaluated once per run.
+- Helper functions are fine, for example one that builds the `StringLiteral` and `TemplateLiteral` variants of a query, or the [pga](./pga.md) aliases that expand to query fragments. What a file _exports_ must be data, though: plain objects, arrays, strings, numbers and booleans. A function in an exported rule is an error. A selector object shared between rules stays one object, so it's evaluated once per run.
 - `console.log` output from a pgq file goes to stderr.
 - To have editors treat `.pgq` as TypeScript, add `"files.associations": { "*.pgq": "typescript" }` to `.vscode/settings.json`.
 
