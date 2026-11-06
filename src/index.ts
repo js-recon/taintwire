@@ -7,8 +7,8 @@ import { setBackend } from "./core.js";
 const MAX_DB_SIZE = 2 ** 40;
 
 setBackend({
-    open(dbPath) {
-        const db = new lbug.Database(dbPath, 0, true, false, MAX_DB_SIZE);
+    open(dbPath, readOnly = false) {
+        const db = new lbug.Database(dbPath, 0, true, readOnly, MAX_DB_SIZE);
         return { db, connection: new lbug.Connection(db) as never };
     },
     // A multi-statement query returns one result per statement.
@@ -17,4 +17,6 @@ setBackend({
 });
 
 export * from "./core.js";
+export * from "./pgq.js";
+export { loadPgq } from "./pgq-load.js";
 export { wasmBackend } from "./wasm.js";

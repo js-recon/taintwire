@@ -12,9 +12,9 @@ const SRC: Record<string, string> = {
 };
 const file = (name: string) => `${name}.${name === "tsKeys" ? "ts" : "js"}`;
 
-let g: taintwire.TaintGraph;
+let g: taintwire.PookieGraph;
 beforeAll(async () => {
-    g = await taintwire.TaintGraph.open();
+    g = await taintwire.PookieGraph.open();
     for (const [name, src] of Object.entries(SRC)) await g.add(src, file(name));
     for (const f of ["modern.js", "webpack-vue.js", "component.tsx"]) await g.add(readFileSync(new URL(`../test/${f}`, import.meta.url), "utf-8"), f);
 });

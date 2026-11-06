@@ -16,9 +16,9 @@ const FILES: Record<string, string> = {
     "entry.js": `${C}900,function(t){t.n(t.i("[project]/xss/source.js [app-client] (ecmascript)"))},"[project]/xss/source.js [app-client] (ecmascript)",t=>{t.s(["getPayload",0,function(){return window.name}])}]);`,
 };
 
-let g: taintwire.TaintGraph;
+let g: taintwire.PookieGraph;
 beforeAll(async () => {
-    g = await taintwire.TaintGraph.open();
+    g = await taintwire.PookieGraph.open();
     await g.addFiles(Object.entries(FILES).map(([filename, code]) => ({ filename, code })));
 });
 afterAll(() => g.close());
@@ -66,7 +66,7 @@ test("taint from window.name reaches every sink across chunks; an unknown key st
 });
 
 test("files added separately aren't linked", async () => {
-    const h = await taintwire.TaintGraph.open();
+    const h = await taintwire.PookieGraph.open();
     for (const f of ["lazy.js", "sink.js"]) await h.add(FILES[f], f);
     expect(await h.query("MATCH ()-[e:IMPORTS]->() RETURN count(e) AS n")).toEqual([{ n: 0 }]);
     await h.close();
@@ -99,7 +99,7 @@ const OLD: Record<string, { files: Record<string, string>; sinks: string[] }> = 
 
 for (const [name, { files, sinks }] of Object.entries(OLD))
     test(`${name}: taint from window.name reaches every sink across chunks; an unknown key stays clean`, async () => {
-        const h = await taintwire.TaintGraph.open();
+        const h = await taintwire.PookieGraph.open();
         await h.addFiles(Object.entries(files).map(([filename, code]) => ({ filename, code })));
         const rows = await h.query(
             "MATCH (a:MemberExpression)-[:SON {key: 'property'}]->(:Identifier {name: 'name'}), p = (a)-[:FLOWS_TO|ARGUMENT_TO|RETURNS_TO* ACYCLIC 1..30]->(b), (:AssignmentExpression)-[:SON {key: 'right'}]->(b) RETURN DISTINCT b.file AS f, b.startOffset AS s, b.endOffset AS e"

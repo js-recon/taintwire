@@ -12,9 +12,9 @@ const FILES: Record<string, string> = {
     "main.js": `(() => { var mods = { 7: (m, e, r) => {} }; function req(id) { var m = { exports: {} }; mods[id](m, m.exports, req); return m.exports; } var b = req("./barrel.js"); document.body.innerHTML = b.again(); })();`,
 };
 
-let g: taintwire.TaintGraph;
+let g: taintwire.PookieGraph;
 beforeAll(async () => {
-    g = await taintwire.TaintGraph.open();
+    g = await taintwire.PookieGraph.open();
     await g.addFiles(Object.entries(FILES).map(([filename, code]) => ({ filename, code })));
 });
 afterAll(() => g.close());
@@ -48,7 +48,7 @@ test("taint from window.name reaches every sink across chunks; an unknown key st
 });
 
 test("files added separately aren't linked", async () => {
-    const h = await taintwire.TaintGraph.open();
+    const h = await taintwire.PookieGraph.open();
     for (const f of ["source.js", "sink.js"]) await h.add(FILES[f], f);
     expect(await h.query("MATCH ()-[e:IMPORTS|CALLS]->() RETURN count(e) AS n")).toEqual([{ n: 0 }]);
     await h.close();
@@ -73,12 +73,12 @@ const BUNDLES: Record<string, Record<string, string>> = {
     },
 };
 const open = async (bundle: string) => {
-    const h = await taintwire.TaintGraph.open();
+    const h = await taintwire.PookieGraph.open();
     await h.addFiles(Object.entries(BUNDLES[bundle]).map(([filename, code]) => ({ filename, code })));
     return h;
 };
 // The innerHTML right-hand sides window.name reaches, and those it doesn't, as code.
-const sinks = async (h: taintwire.TaintGraph) => {
+const sinks = async (h: taintwire.PookieGraph) => {
     const rhs = async (q: string) => new Set(await Promise.all((await h.query(q)).map((r) => h.code(r.id as string))));
     const sink = "(a:AssignmentExpression)-[:SON {key: 'left'}]->(:MemberExpression)-[:SON {key: 'property'}]->(:Identifier {name: 'innerHTML'}), (a)-[:SON {key: 'right'}]->(v)";
     const all = await rhs(`MATCH ${sink} RETURN v.id AS id`);

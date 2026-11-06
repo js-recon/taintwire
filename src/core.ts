@@ -56,7 +56,7 @@ export interface LbugConnection {
 
 /** What differs between the Node and WASM builds of Ladybug. The entry point (index.ts / browser.ts) sets the default. */
 export interface Backend {
-    open(dbPath: string): { db: { close(): Promise<void> }; connection: LbugConnection };
+    open(dbPath: string, readOnly?: boolean): { db: { close(): Promise<void> }; connection: LbugConnection };
     /** Rows of the last statement of a query result. */
     rows(res: unknown): Promise<Record<string, unknown>[]>;
     exists(path: string): boolean | Promise<boolean>;
@@ -990,8 +990,8 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     return { rootIds: units.map(([ast]) => idOf(ast)), nodes, scopes, rels, evals };
 }
 
-/** A LadybugDB-backed graph of one or more parsed JS files. */
-export class TaintGraph {
+/** A PookieGraph: a LadybugDB-backed graph of one or more parsed JS files, saved as a single `.pg` file. */
+export class PookieGraph {
     private constructor(
         readonly db: { close(): Promise<void> },
         readonly connection: LbugConnection,
@@ -1004,17 +1004,23 @@ export class TaintGraph {
     // ponytail: unbounded per-file source cache for code(); add LRU eviction if graphs outgrow memory.
     private readonly sources = new Map<string, string>();
 
-    /** Open (or create) a graph. Defaults to in-memory; pass a path to persist. `parser` applies to add(). */
+    /**
+     * Open (or create) a graph. Defaults to in-memory; pass a path (`.pg`) to persist. `parser` applies to add().
+     * `readOnly` opens an existing file without writing to it (no schema setup, no WAL); add() then fails.
+     */
     static async open(
         dbPath = ":memory:",
-        { parser = "cs-mast", backend = defaultBackend }: { parser?: Parser; backend?: Backend } = {}
-    ): Promise<TaintGraph> {
-        const { db, connection } = backend.open(dbPath);
+        { parser = "cs-mast", backend = defaultBackend, readOnly = false }: { parser?: Parser; backend?: Backend; readOnly?: boolean } = {}
+    ): Promise<PookieGraph> {
+        if (readOnly && !(await backend.exists(dbPath))) throw new Error(`taintwire: no PookieGraph at ${dbPath}`);
+        const { db, connection } = backend.open(dbPath, readOnly);
         const relPairs = Object.fromEntries(Object.keys(RELS).map((r) => [r, new Set()])) as Record<Rel, Set<string>>;
-        const g = new TaintGraph(db, connection, new Set(), relPairs, parser, backend);
+        const g = new PookieGraph(db, connection, new Set(), relPairs, parser, backend);
         // Each file's source is stored once; node code is sliced from it by offset (see code()).
-        await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SOURCE}(file STRING PRIMARY KEY, code STRING)`);
-        await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SCOPE}(${Object.entries(SCOPE_COLUMNS).map(([c, t]) => `${c} ${t}`).join(", ")})`);
+        if (!readOnly) {
+            await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SOURCE}(file STRING PRIMARY KEY, code STRING)`);
+            await g.query(`CREATE NODE TABLE IF NOT EXISTS ${SCOPE}(${Object.entries(SCOPE_COLUMNS).map(([c, t]) => `${c} ${t}`).join(", ")})`);
+        }
         for (const t of await g.query("CALL show_tables() RETURN name, type")) {
             if (t.type === "NODE" && t.name !== SOURCE && t.name !== SCOPE) g.tables.add(t.name as string);
             if (t.type === "REL" && (t.name as string) in RELS) {
@@ -1023,7 +1029,7 @@ export class TaintGraph {
             }
         }
         for (const [rel, [from, to]] of Object.entries(DEFAULT_PAIRS) as [Rel, [string, string]][]) {
-            if (g.relPairs[rel].size) continue;
+            if (readOnly || g.relPairs[rel].size) continue;
             await g.ensureNodeTable(from);
             await g.ensureNodeTable(to);
             await g.ensureRelPair(rel, from, to);
@@ -1066,7 +1072,7 @@ export class TaintGraph {
     }
 
     /**
-     * Write the whole graph to a new LadybugDB file at `dbPath`.
+     * Write the whole graph to a new PookieGraph file (`.pg`, a LadybugDB database) at `dbPath`.
      * Copies rows itself: Ladybug's EXPORT DATABASE rejects a rel table with multiple FROM/TO pairs.
      */
     async save(dbPath: string): Promise<void> {
@@ -1084,7 +1090,7 @@ export class TaintGraph {
             }
         const scopes = (await this.query(`MATCH (s:${SCOPE}) RETURN ${Object.keys(SCOPE_COLUMNS).map((c) => `s.${c} AS ${c}`).join(", ")}`)) as ScopeRow[];
         const sources = await this.query(`MATCH (s:${SOURCE}) RETURN s.file AS file, s.code AS code`);
-        const out = await TaintGraph.open(dbPath, { backend: this.backend });
+        const out = await PookieGraph.open(dbPath, { backend: this.backend });
         try {
             // One COPY per (rel, from, to) pair; checkpointing after each made save() ~4x slower.
             await out.query("CALL auto_checkpoint=false");
@@ -1153,11 +1159,16 @@ export class TaintGraph {
     }
 }
 
-async function importCode(code: string, opts: { filename?: string; dbPath?: string; parser?: Parser } = {}): Promise<TaintGraph> {
-    const graph = await TaintGraph.open(opts.dbPath, { parser: opts.parser });
+async function importCode(code: string, opts: { filename?: string; dbPath?: string; parser?: Parser } = {}): Promise<PookieGraph> {
+    const graph = await PookieGraph.open(opts.dbPath, { parser: opts.parser });
     await graph.add(code, opts.filename);
     return graph;
 }
+
+/** @deprecated Renamed to {@link PookieGraph}. */
+export const TaintGraph = PookieGraph;
+/** @deprecated Renamed to {@link PookieGraph}. */
+export type TaintGraph = PookieGraph;
 
 // `taintwire.import(code)` per LIBRARY.md; `import` is reserved as a binding name, not as an export name.
 export { importCode as import };

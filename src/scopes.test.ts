@@ -59,9 +59,9 @@ const CASES: [string, string, Record<string, string>][] = [
     ["export wrappers", "export const a = 1; export function b(p) {} export default class {}", { a: M, b: M, p: fn("FunctionDeclaration", M) }],
 ];
 
-let g: taintwire.TaintGraph;
+let g: taintwire.PookieGraph;
 beforeAll(async () => {
-    g = await taintwire.TaintGraph.open();
+    g = await taintwire.PookieGraph.open();
     for (const [i, [, src]] of CASES.entries()) await g.add(src, `case${i}.js`);
 });
 afterAll(() => g.close());
@@ -139,7 +139,7 @@ test("P: scope provenance and deterministic signatures", async () => {
     }
     // reproducible: the same source in a fresh graph gives the same scope ids and signatures
     const src = CASES.map(([, s]) => s).find((s) => s.startsWith("class Foo { static"))!;
-    const snap = async (graph: taintwire.TaintGraph) =>
+    const snap = async (graph: taintwire.PookieGraph) =>
         (await graph.query("MATCH (s:Scope) RETURN s.id AS id, s.kind AS kind, s.signature AS sig, s.owner_signature AS osig ORDER BY id")).map((r) => JSON.stringify(r));
     const a = await taintwire.import(src, { filename: "same.js" });
     const b = await taintwire.import(src, { filename: "same.js" });
@@ -179,8 +179,8 @@ test("Q: one scope per owner, one IN_SCOPE per DECLARES, no duplicate edges", as
 });
 
 test("the babel parser builds the same scopes, without signatures", async () => {
-    const a = await taintwire.TaintGraph.open();
-    const b = await taintwire.TaintGraph.open(":memory:", { parser: "babel" });
+    const a = await taintwire.PookieGraph.open();
+    const b = await taintwire.PookieGraph.open(":memory:", { parser: "babel" });
     for (const [i, [, src]] of CASES.entries()) await Promise.all([a.add(src, `case${i}.js`), b.add(src, `case${i}.js`)]);
     const q = "MATCH (i:Identifier)-[:IN_SCOPE]->(s:Scope) RETURN i.file AS file, i.name AS name, s.id AS id, s.kind AS kind ORDER BY file, i.startOffset";
     expect(await b.query(q)).toEqual(await a.query(q));
@@ -194,8 +194,8 @@ test("scopes survive save() and reopen", async () => {
     const q = "MATCH (a)-[e]->(s:Scope) RETURN label(e) AS rel, count(*) AS n ORDER BY rel";
     try {
         const before = await g.query(q);
-        await g.save(join(dir, "s.lbug"));
-        const saved = await taintwire.TaintGraph.open(join(dir, "s.lbug"));
+        await g.save(join(dir, "s.pg"));
+        const saved = await taintwire.PookieGraph.open(join(dir, "s.pg"));
         expect(await saved.query(q)).toEqual(before);
         expect(await saved.query("MATCH (s:Scope) RETURN count(*) AS n")).toEqual(await g.query("MATCH (s:Scope) RETURN count(*) AS n"));
         await saved.add("{ let late; }", "late.js"); // reuses the reopened Scope table and rel pairs

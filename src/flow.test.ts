@@ -92,9 +92,9 @@ const SRC: Record<string, string> = {
 };
 const file = (name: string) => `${name}.${name === "types" ? "ts" : "js"}`;
 
-let g: taintwire.TaintGraph;
+let g: taintwire.PookieGraph;
 beforeAll(async () => {
-    g = await taintwire.TaintGraph.open();
+    g = await taintwire.PookieGraph.open();
     for (const [name, src] of Object.entries(SRC)) await g.add(src, file(name));
 });
 afterAll(() => g.close());
@@ -595,7 +595,7 @@ test("A18: access is the exact occurrence; access_signature is its (content) has
     expect(new Set(rows.map((r) => r.sig)).size).toBe(1);
     // stable across a re-parse of the same source
     const again = await taintwire.import(src, { filename: "occurrences.js" });
-    const sigs = async (graph: taintwire.TaintGraph) =>
+    const sigs = async (graph: taintwire.PookieGraph) =>
         (await graph.query("MATCH ()-[r:READS|WRITES]->() RETURN r.access_signature AS s ORDER BY s")).map((r) => r.s);
     expect(await sigs(again)).toEqual(rows.map((r) => r.sig).sort());
     await again.close();
@@ -603,12 +603,12 @@ test("A18: access is the exact occurrence; access_signature is its (content) has
 
 test("A19: reopening, or re-adding a file, never re-runs or duplicates the analysis", async () => {
     const dir = mkdtempSync(join(tmpdir(), "taintwire-"));
-    const counts = async (graph: taintwire.TaintGraph) =>
+    const counts = async (graph: taintwire.PookieGraph) =>
         graph.query(
             "MATCH ()-[e:REFERS_TO|READS|WRITES|FLOWS_TO]->() RETURN label(e) AS rel, count(*) AS n ORDER BY rel"
         );
     try {
-        const path = join(dir, "g.lbug");
+        const path = join(dir, "g.pg");
         const first = await taintwire.import(SRC.ugly, { filename: "ugly.js", dbPath: path });
         const before = await counts(first);
         expect(before.length).toBe(4);
@@ -617,10 +617,10 @@ test("A19: reopening, or re-adding a file, never re-runs or duplicates the analy
         expect(await counts(first)).toEqual(before);
         await first.close();
         // reopening a persisted graph doesn't re-analyse it
-        const reopened = await taintwire.TaintGraph.open(path);
+        const reopened = await taintwire.PookieGraph.open(path);
         expect(await counts(reopened)).toEqual(before);
         await reopened.close();
-        const again = await taintwire.TaintGraph.open(path);
+        const again = await taintwire.PookieGraph.open(path);
         expect(await counts(again)).toEqual(before);
         await again.close();
     } finally {
@@ -700,7 +700,7 @@ test("adversarial non-references: names that collide with declared bindings", as
 });
 
 test("21: idempotent and well formed over the fixtures", async () => {
-    const h = await taintwire.TaintGraph.open();
+    const h = await taintwire.PookieGraph.open();
     const fixtures = ["modern.js", "webpack-vue.js", "component.tsx"];
     for (const f of fixtures) await h.add(readFileSync(new URL(`../test/${f}`, import.meta.url), "utf-8"), f);
     for (const rel of SEMANTIC) {
@@ -738,7 +738,7 @@ test("21: idempotent and well formed over the fixtures", async () => {
     }
     // re-importing gives the same edges (keyed by position, since AST ids are random)
     // types only for cs-mast vs cs-mast: Babel 8's ImportExpression is a CallExpression in cs-mast's Babel 7
-    const snap = async (graph: taintwire.TaintGraph, typed = true) => {
+    const snap = async (graph: taintwire.PookieGraph, typed = true) => {
         const out: string[] = [];
         for (const rel of SEMANTIC)
             for (const r of await graph.query(
@@ -751,11 +751,11 @@ test("21: idempotent and well formed over the fixtures", async () => {
                 );
         return out.sort();
     };
-    const again = await taintwire.TaintGraph.open();
+    const again = await taintwire.PookieGraph.open();
     for (const f of fixtures) await again.add(readFileSync(new URL(`../test/${f}`, import.meta.url), "utf-8"), f);
     expect(await snap(again)).toEqual(await snap(h));
     // the babel parser gives the same edges, with null signatures
-    const babel = await taintwire.TaintGraph.open(":memory:", { parser: "babel" });
+    const babel = await taintwire.PookieGraph.open(":memory:", { parser: "babel" });
     for (const f of fixtures) await babel.add(readFileSync(new URL(`../test/${f}`, import.meta.url), "utf-8"), f);
     expect(await snap(babel, false)).toEqual(await snap(h, false));
     const [nul] = await babel.query("MATCH ()-[e:READS]->() RETURN count(e) AS n, count(e.access_signature) AS s");
@@ -770,8 +770,8 @@ test("semantic edges survive save() and reopen", async () => {
         "MATCH (a)-[e:REFERS_TO|READS|WRITES|FLOWS_TO]->(b) RETURN label(e) AS rel, count(*) AS n, count(e.access) AS acc ORDER BY rel";
     try {
         const before = await g.query(q);
-        await g.save(join(dir, "f.lbug"));
-        const saved = await taintwire.TaintGraph.open(join(dir, "f.lbug"));
+        await g.save(join(dir, "f.pg"));
+        const saved = await taintwire.PookieGraph.open(join(dir, "f.pg"));
         expect(await saved.query(q)).toEqual(before);
         await saved.add("let late = 1; late;", "late.js"); // reuses the reopened rel pairs
         expect(
