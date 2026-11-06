@@ -52,7 +52,7 @@ export default {
 type PGSeverity = "info" | "low" | "medium" | "high" | "critical";
 
 interface PGCypher {
-    query: string; // must RETURN id, file, line, col; may RETURN kind
+    query: string; // must RETURN id (plus file, line, col in return/from selectors); may RETURN kind
 }
 
 interface PGSelector {
@@ -84,7 +84,7 @@ interface PGRule {
 | `maxHops` | The longest flow kept. Defaults to 8. |
 | `return` | A rule's findings: the union of these selectors' rows, without duplicates. A bare `PGCypher` counts as a selector of one query. |
 
-Every query must `RETURN id, file, line, col`. A query that doesn't is a runtime error for its rule. A label with no table in the graph (an AST type that never occurs in it) gives no rows, not an error.
+Every query must `RETURN id`. A selector whose rows become findings (in `return`) or sources (in `from`) must also return `file, line, col`; one used only through `uses` can return just `id`. A missing column is a runtime error for its rule. A label with no table in the graph (an AST type that never occurs in it) gives no rows, not an error.
 
 ## Writing pgq files
 

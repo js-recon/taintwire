@@ -6,7 +6,10 @@ export type PGSeverity = (typeof PG_SEVERITIES)[number];
 export const PG_MODES = ["strict", "lenient", "deep"] as const;
 export type PGMode = (typeof PG_MODES)[number];
 
-/** One Cypher query. It must `RETURN id, file, line, col` (and may return `kind`). */
+/**
+ * One Cypher query. It must `RETURN id`; in a selector used in `return` or `from`, also `file, line, col` (and it may
+ * return `kind`).
+ */
 export interface PGCypher {
     query: string;
 }
@@ -251,13 +254,18 @@ async function flows(q: Query, sources: string[], sinks: string[], mode: PGMode)
     return [...best.values()];
 }
 
-const loc = (r: Row): PgqLocation => ({
-    id: r.id,
-    file: r.file,
-    line: Number(r.line),
-    col: Number(r.col),
-    ...(r.kind != null && { kind: String(r.kind) }),
-});
+// Rows that become findings or sources need a location; a selector used only through `uses` can return just `id`.
+const loc = (r: Row): PgqLocation => {
+    if (r.file == null || r.line == null || r.col == null)
+        throw new Error("a selector in return or from must RETURN id, file, line and col");
+    return {
+        id: r.id,
+        file: r.file,
+        line: Number(r.line),
+        col: Number(r.col),
+        ...(r.kind != null && { kind: String(r.kind) }),
+    };
+};
 
 /**
  * Run `rules` on `graph`. Selectors are evaluated once per call however many rules share them. Flow modes for `from`:
@@ -298,9 +306,7 @@ export async function runPgq(
         // concat, not push(...rows): a large graph's query can return more rows than fit in an argument list
         let rows: Row[] = [];
         for (const c of cyphers(s)) rows = rows.concat(await q(c.query, params));
-        for (const r of rows)
-            if (r.id == null || r.file == null || r.line == null || r.col == null)
-                throw new Error("every query must RETURN id, file, line and col");
+        if (rows.some((r) => r.id == null)) throw new Error("every query must RETURN id");
         const byId = new Map(rows.map((r) => [r.id as string, r]));
         if (!froms(s).length) return [...byId.values()].map((row) => ({ row }));
 

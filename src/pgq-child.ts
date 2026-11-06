@@ -69,5 +69,5 @@ for (const file of files) {
         results.push({ file, error: (e as Error).message });
     }
 }
-out(JSON.stringify(results) + "\n");
-process.exit(0);
+// Exit once the line is flushed: a pipe write is async, and exiting early truncates big results.
+out(JSON.stringify(results) + "\n", () => process.exit(0));

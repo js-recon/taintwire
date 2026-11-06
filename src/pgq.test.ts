@@ -119,7 +119,9 @@ WHERE f.name = 'eval' AND a.idx = 0 RETURN n.id AS id, ${AT}`;
         };
         const { findings, errors } = await run(`el.innerHTML = x; el.innerHTML = y;`, [broken, plain]);
         expect(findings.map((f) => f.ruleId)).toEqual(["plain", "plain"]);
-        expect(errors).toEqual([{ ruleId: "broken", message: "every query must RETURN id, file, line and col" }]);
+        expect(errors).toEqual([
+            { ruleId: "broken", message: "a selector in return or from must RETURN id, file, line and col" },
+        ]);
     });
 
     test("checkPgqCypher reports syntax errors, not missing labels", async () => {
@@ -220,6 +222,22 @@ export default [
         } finally {
             rmSync(dir, { recursive: true, force: true });
             rmSync(outside, { recursive: true, force: true });
+        }
+    });
+
+    test("a result bigger than a pipe buffer arrives whole", async () => {
+        const dir = pack({
+            "big.pgq": `export default Array.from({ length: 400 }, (_, i) => ({
+    id: "r" + i, name: "r", severity: "info", message: "m",
+    return: [{ query: "MATCH (n:Identifier) WHERE n.name <> '" + "x".repeat(1000) + "' RETURN n.id AS id" }],
+}));`,
+        });
+        try {
+            const { rules, errors } = await taintwire.loadPgq([join(dir, "big.pgq")]);
+            expect(errors).toEqual([]);
+            expect(rules).toHaveLength(400);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
         }
     });
 
