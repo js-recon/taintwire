@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "vitest";
 import * as taintwire from "./index.js";
+import { linkedVsUnits } from "./test-utils.js";
 
 // Chunks as Next.js 16.4 (Turbopack) emits them for js-recon-research turbopack/cross-chunk-shapes, trimmed to the modules
 // that matter. `C` is the chunk prelude; source and sink modules are in different files.
@@ -107,3 +108,9 @@ for (const [name, { files, sinks }] of Object.entries(OLD))
         await h.close();
         expect([...new Set(rows.map((r) => files[r.f as string].slice(Number(r.s), Number(r.e))))].sort()).toEqual([...sinks].sort());
     });
+
+test("planUnits: the units together reach what the linked graph reaches, loaders included", async () => {
+    const { linked, units } = await linkedVsUnits(FILES);
+    expect(linked.hit.length).toBeGreaterThan(5);
+    expect(units).toEqual(linked);
+});

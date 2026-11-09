@@ -1,5 +1,5 @@
 // Test helpers shared by the semantic suites. Not part of the build (see tsconfig.json).
-import type { PookieGraph } from "./index.js";
+import { moduleLinks, planUnits, PookieGraph } from "./index.js";
 
 /**
  * Every `rel` edge starting in `file`, as sorted "a -> b" strings: Identifiers as `name`, or `name:decl` for a
@@ -38,4 +38,35 @@ export async function reaches(
     return rows.some(
         (r) => src.slice(Number(r.as), Number(r.ae)) === from && src.slice(Number(r.bs), Number(r.be)) === to
     );
+}
+
+/** The innerHTML right-hand sides window.name reaches (`hit`), and those it doesn't (`clean`), as code. */
+export async function sinks(h: PookieGraph) {
+    const rhs = async (q: string) => new Set(await Promise.all((await h.query(q)).map((r) => h.code(r.id as string))));
+    const sink = "(a:AssignmentExpression)-[:SON {key: 'left'}]->(:MemberExpression)-[:SON {key: 'property'}]->(:Identifier {name: 'innerHTML'}), (a)-[:SON {key: 'right'}]->(v)";
+    const all = await rhs(`MATCH ${sink} RETURN v.id AS id`);
+    const hit = await rhs(
+        `MATCH (s:MemberExpression)-[:SON {key: 'property'}]->(:Identifier {name: 'name'}), (s)-[:FLOWS_TO|ARGUMENT_TO|RETURNS_TO* ACYCLIC 1..30]->(v), ${sink} RETURN DISTINCT v.id AS id`
+    );
+    return { hit: [...hit].sort(), clean: [...all].filter((c) => !hit.has(c)).sort() };
+}
+
+/** sinks() of one linked graph of `files`, and of planUnits()' units together (a sink any unit reaches is a hit). */
+export async function linkedVsUnits(files: Record<string, string>) {
+    const of = async (names: string[]) => {
+        const h = await PookieGraph.open();
+        await h.addFiles(names.map((filename) => ({ filename, code: files[filename] })));
+        const s = await sinks(h);
+        await h.close();
+        return s;
+    };
+    const linked = await of(Object.keys(files));
+    const hit = new Set<string>();
+    const clean = new Set<string>();
+    for (const u of planUnits(new Map(Object.entries(files).map(([f, c]) => [f, moduleLinks(c, f)])))) {
+        const s = await of(u);
+        s.hit.forEach((x) => hit.add(x));
+        s.clean.forEach((x) => clean.add(x));
+    }
+    return { linked, units: { hit: [...hit].sort(), clean: [...clean].filter((c) => !hit.has(c)).sort() } };
 }

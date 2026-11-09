@@ -55,12 +55,22 @@ Before 0.2.0 this class was called `TaintGraph`. That name is still exported as 
 ### `PookieGraph.open()`
 
 ```ts
-static open(dbPath?: string, opts?: { parser?: Parser; readOnly?: boolean }): Promise<PookieGraph>;
+static open(
+    dbPath?: string,
+    opts?: { parser?: Parser; readOnly?: boolean; bufferPoolMB?: number; threads?: number }
+): Promise<PookieGraph>;
 ```
 
 Opens the PookieGraph at `dbPath` (by convention a `.pg` file), creating it if it doesn't exist. `dbPath` defaults to `":memory:"`. With `readOnly: true`, the file must already exist. It is opened without writing anything, so `add()` fails and several processes can read the same file. Opening an existing database picks up its node tables and edge tables, so later `add()` calls reuse them.
 
 `parser` (default `"cs-mast"`) applies to every `add()` on this handle. It isn't stored in the database: reopening a file with a different `parser` is allowed, and only affects files added from then on.
+
+`bufferPoolMB` and `threads` bound what Ladybug uses:
+
+- `bufferPoolMB` is the most memory Ladybug's buffer pool may take. It defaults to half of the memory the process may use: the container's limit inside Docker or Kubernetes, otherwise the machine's RAM. `0` is Ladybug's own default, a share of the host's RAM even inside a container. A load or query that needs more than the pool fails with `Buffer manager exception: ... The buffer pool is full`.
+- `threads` is the number of query threads, `DEFAULT_THREADS` (2) by default. Ladybug's own default is one per core of the host.
+
+The browser build ignores both. See [Memory](memory.md).
 
 ### `graph.add()`
 
@@ -218,6 +228,32 @@ function flattenFiles(
 ```
 
 What `addFiles()` loads. The same as `flatten()`, but for several files, with one `rootId` per unit, in order. Each file keeps its own scopes, and the [webpack](../bundlers/webpack.md#how-it-works) / [Turbopack](../bundlers/turbopack.md#how-it-works) registry pass links them. With `parse`, each `eval("<string literal>")` is parsed and walked in the eval's scope, and listed in `evals` as a virtual file (`addFiles()` stores their `Source` rows). Without it, eval strings stay strings. `flatten(ast, file)` is `flattenFiles([[ast, file]])`. Exported for testing and research, and likely to change.
+
+## `moduleLinks()`
+
+```ts
+type ModuleLinks = { defines: string[]; needs: string[] };
+function moduleLinks(code: string, filename: string, parser?: Parser): ModuleLinks;
+```
+
+Scans one file on its own. `defines` lists the bundler module ids the file registers (webpack 4/5 factories, Turbopack modules). `needs` lists the module ids it loads (`require(id)`, `import()`, `ctx.i/r/A(id)`, and a Turbopack loader's target), including ids that another file defines. It parses and flattens the file, and the graph rows are dropped once the ids are read.
+
+## `planUnits()`
+
+```ts
+function planUnits(links: Map<string, ModuleLinks>): string[][];
+```
+
+Splits files into units that can each be loaded as their own graph. A unit is a file plus, transitively, every file that defines a module it needs. A unit contained in another one is dropped. Every file is still in a unit together with everything it loads, so value paths through the module registry stay whole. Files with no registry, such as plain ES modules (which aren't linked anyway), are one unit each. See [Memory](memory.md#one-graph-per-unit) for what this costs and what it misses.
+
+```ts
+const links = new Map(files.map((f) => [f.filename, moduleLinks(f.code, f.filename)]));
+for (const unit of planUnits(links)) {
+    const g = await PookieGraph.open(`unit-${n++}.pg`);
+    await g.addFiles(unit.map((name) => files.find((f) => f.filename === name)!));
+    // ... query, close
+}
+```
 
 ## `declared()`
 
