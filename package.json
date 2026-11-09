@@ -1,6 +1,6 @@
 {
     "name": "@js-recon/taintwire",
-    "version": "0.2.0-alpha.2",
+    "version": "0.2.0-alpha.3",
     "description": "Graph-based (LadybugDB/openCypher) AST and taint analysis for JavaScript",
     "type": "module",
     "main": "build/index.js",
@@ -10,7 +10,7 @@
     ],
     "scripts": {
         "build": "rm -rf build/ && tsc",
-        "test": "vitest run --testTimeout=30000",
+        "test": "vitest run --testTimeout=30000 --hookTimeout=30000",
         "graph:stats": "node scripts/graph-stats.mjs"
     },
     "author": "Shriyans Sudhi",

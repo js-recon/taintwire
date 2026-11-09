@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "vitest";
 import * as taintwire from "./index.js";
+import { linkedVsUnits, sinks } from "./test-utils.js";
 
 // Chunks in the shapes webpack 5.112 emits (see docs/bundlers/webpack.md): source and sink in different files.
 const FILES: Record<string, string> = {
@@ -77,17 +78,6 @@ const open = async (bundle: string) => {
     await h.addFiles(Object.entries(BUNDLES[bundle]).map(([filename, code]) => ({ filename, code })));
     return h;
 };
-// The innerHTML right-hand sides window.name reaches, and those it doesn't, as code.
-const sinks = async (h: taintwire.PookieGraph) => {
-    const rhs = async (q: string) => new Set(await Promise.all((await h.query(q)).map((r) => h.code(r.id as string))));
-    const sink = "(a:AssignmentExpression)-[:SON {key: 'left'}]->(:MemberExpression)-[:SON {key: 'property'}]->(:Identifier {name: 'innerHTML'}), (a)-[:SON {key: 'right'}]->(v)";
-    const all = await rhs(`MATCH ${sink} RETURN v.id AS id`);
-    const hit = await rhs(
-        `MATCH (s:MemberExpression)-[:SON {key: 'property'}]->(:Identifier {name: 'name'}), (s)-[:FLOWS_TO|ARGUMENT_TO|RETURNS_TO* ACYCLIC 1..30]->(v), ${sink} RETURN DISTINCT v.id AS id`
-    );
-    return { hit: [...hit].sort(), clean: [...all].filter((c) => !hit.has(c)).sort() };
-};
-
 test("webpack 5: CommonJS exports, require.n, require.cw, lazy requires, import() callbacks and await", async () => {
     const h = await open("wp5");
     expect(await sinks(h)).toEqual({
@@ -118,4 +108,19 @@ test("eval builds: string-literal eval bodies are walked in the eval's scope, as
     expect(await h.code(ev.id as string)).toBe("function ev() { return window.name; }");
     expect(await h.query("MATCH (:CallExpression)-[e:SON {key: 'evaluated'}]->(f:File) RETURN count(f) AS n")).toEqual([{ n: 2 }]);
     await h.close();
+});
+
+test.each([["round 1", FILES], ...Object.entries(BUNDLES)])("planUnits: the %s units together reach what the linked graph reaches", async (_, files) => {
+    const { linked, units } = await linkedVsUnits(files);
+    expect(units).toEqual(linked);
+});
+
+test("planUnits: a shared module joins each importer's unit and isn't a unit of its own", async () => {
+    const links = new Map(Object.entries(FILES).map(([f, c]) => [f, taintwire.moduleLinks(c, f)]));
+    expect(links.get("source.js")).toEqual({ defines: ["323"], needs: [] });
+    expect(links.get("sink.js")).toEqual({ defines: ["549"], needs: ["323"] });
+    expect(taintwire.planUnits(links)).toEqual([
+        ["source.js", "sink.js"],
+        ["source.js", "barrel.js", "main.js"],
+    ]);
 });

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0-alpha.3 - 2026-11-09
+
+### Added
+
+- `PookieGraph.open()` takes `bufferPoolMB` and `threads` (see the new [Memory](https://taintwire.js-recon.io/next/api/memory) page). In the Node build the buffer pool defaults to half of the memory the process may use, which is the container's limit if there is one. Ladybug's own default is sized from the host's RAM even inside a container, so it could grow past the container's limit until the container killed the process. Query threads default to 2 (`DEFAULT_THREADS`), where Ladybug ran one per core of the host.
+- `moduleLinks(code, filename)` scans one file for the bundler module ids it registers and loads. `planUnits(links)` splits files into units: each file plus the files that define what it loads, transitively. Each unit can be loaded as its own graph.
+
+### Fixed
+
+- The Node backend now closes each query result once it is read. Open results kept native memory until they were garbage collected, which outlived the graph's `close()`. Opening graphs one after another grew memory by about 700 MB over 8 graphs.
+- `load()` drops each table's rows once they are copied, so the JS heap shrinks during a load instead of holding every row to the end.
+
 ## 0.2.0-alpha.2 - 2026-11-06
 
 ### Added

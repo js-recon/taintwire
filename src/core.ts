@@ -56,11 +56,20 @@ export interface LbugConnection {
 
 /** What differs between the Node and WASM builds of Ladybug. The entry point (index.ts / browser.ts) sets the default. */
 export interface Backend {
-    open(dbPath: string, readOnly?: boolean): { db: { close(): Promise<void> }; connection: LbugConnection };
+    open(dbPath: string, readOnly?: boolean, limits?: Limits): { db: { close(): Promise<void> }; connection: LbugConnection };
     /** Rows of the last statement of a query result. */
     rows(res: unknown): Promise<Record<string, unknown>[]>;
     exists(path: string): boolean | Promise<boolean>;
 }
+
+/**
+ * Ladybug's memory and CPU. `bufferPoolMB`: the Node build defaults to half of the memory the process may use (its
+ * cgroup limit, if any); 0 is Ladybug's own default, a share of the host's RAM. `threads`: query threads.
+ */
+export type Limits = { bufferPoolMB?: number; threads?: number };
+
+/** Query threads when open() isn't given a number (Ladybug's own default is one per core of the host). */
+export const DEFAULT_THREADS = 2;
 
 let defaultBackend: Backend;
 export const setBackend = (b: Backend) => void (defaultBackend = b);
@@ -798,7 +807,9 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         const id = p && defs.get(p)?.length === 1 ? promiseNs(c.callee.object) : undefined;
         if (id !== undefined) paramNs.set(p!, id);
     }
-    // IMPORTS: each call that loads a module, synchronously or for an import().
+    // IMPORTS: each call that loads a module, synchronously or for an import(). `needs` keeps every module id loaded,
+    // also those no factory in these files defines (another file's), for moduleLinks().
+    const needs = new Set<string>();
     for (const c of cs) {
         const { callee: f, arguments: args } = c;
         const id = isReq(f) && args.length === 1 ? lit(args[0])
@@ -806,8 +817,17 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
             : isHelper(f, "t") ? lit(args[0])
             : f.type === "MemberExpression" && keyOf(f) === "bind" && (isReq(f.object) || isHelper(f.object, "t")) ? lit(args[1])
             : undefined;
+        if (id !== undefined) needs.add(id);
         for (const fac of id === undefined ? [] : factories.get(id) ?? []) edge("IMPORTS", c, fac, { module_id: id });
     }
+    // A Turbopack loader module (`ctx.v(i => ... i(target))`) imports its target through its param, which is only known
+    // to be a require when the `ctx.A(id)` call that runs it is in the same files. moduleLinks() scans one file at a
+    // time, so it counts `p(id)` on any loader-shaped export's param as a need (a superset: an extra file, never a lost link).
+    const turboFacs = new Set(ctxOf.values());
+    const loaderParams = new Set<Node>();
+    for (const [fac, vs] of whole)
+        if (turboFacs.has(fac)) for (const v of vs as Any[]) if (isFunction(v) && v.params[0]?.type === "Identifier") loaderParams.add(binding(v.params[0])!);
+    for (const c of cs) if (c.callee.type === "Identifier" && loaderParams.has(refers.get(c.callee)!) && lit(c.arguments[0]) !== undefined) needs.add(lit(c.arguments[0])!);
     // A factory's own exports, or those of the namespace(s) Turbopack's `ctx.n(ns)` made its namespace.
     const valuesOf = (id: string | undefined, key: string, seen = new Set<string>()): Node[] => {
         if (id === undefined || seen.has(id)) return [];
@@ -987,7 +1007,47 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
             if (fn.type === "ArrowFunctionExpression" && fn.body.type !== "BlockStatement") edge("RETURNS_TO", fn.body, c); // concise body
         }
     }
-    return { rootIds: units.map(([ast]) => idOf(ast)), nodes, scopes, rels, evals };
+    // `cw@...` factories are inline CommonJS bodies, not registry ids another file can load.
+    const defines = [...factories.keys()].filter((id) => !id.startsWith("cw@"));
+    return { rootIds: units.map(([ast]) => idOf(ast)), nodes, scopes, rels, evals, defines, needs: [...needs] };
+}
+
+/** Which bundler module ids a file registers (`defines`) and which it loads (`needs`), from one file alone. */
+export type ModuleLinks = { defines: string[]; needs: string[] };
+
+/** Scan one file for planUnits(). Parses and flattens it, and keeps only the module ids, so its rows are garbage at once. */
+export function moduleLinks(code: string, filename: string, parser: Parser = "cs-mast"): ModuleLinks {
+    const parse = (c: string) => parseAst(c, parser);
+    const { defines, needs } = flattenFiles([[parse(code), filename]], { parse });
+    return { defines, needs };
+}
+
+/**
+ * Split files into units that can each be loaded as its own graph: a file plus every file that defines a module it
+ * loads, transitively. A unit contained in another one is dropped, so each file is still loaded with everything it
+ * links to and the units cover every file. Files with no module registry (plain ES modules) are a unit each. Returned
+ * in input order of each unit's first file, each unit's files in input order.
+ * ponytail: links follow imports only, so a value passed between two importers of a shared module (A -> store -> B)
+ * is only found by one linked graph of every file; and each file is parsed twice (scan, then build), cache if time matters.
+ */
+export function planUnits(links: Map<string, ModuleLinks>): string[][] {
+    const files = [...links.keys()];
+    const definedBy = new Map<string, string[]>();
+    for (const [f, l] of links) for (const id of l.defines) (definedBy.get(id) ?? definedBy.set(id, []).get(id)!).push(f);
+    const order = new Map(files.map((f, i) => [f, i]));
+    const closures = files.map((root) => {
+        const seen = new Set([root]);
+        const st = [root];
+        while (st.length)
+            for (const id of links.get(st.pop()!)!.needs)
+                for (const g of definedBy.get(id) ?? []) if (!seen.has(g)) seen.add(g), st.push(g);
+        return [...seen].sort((a, b) => order.get(a)! - order.get(b)!);
+    });
+    // Biggest first, so a unit only has to be checked against the ones already kept; equal sets keep the first.
+    const bySize = closures.map((c, i) => [c, i] as const).sort((a, b) => b[0].length - a[0].length || a[1] - b[1]);
+    const kept: [string[], Set<string>, number][] = [];
+    for (const [c, i] of bySize) if (!kept.some(([, k]) => c.every((f) => k.has(f)))) kept.push([c, new Set(c), i]);
+    return kept.sort((a, b) => a[2] - b[2]).map(([c]) => c);
 }
 
 /** A PookieGraph: a LadybugDB-backed graph of one or more parsed JS files, saved as a single `.pg` file. */
@@ -1007,13 +1067,20 @@ export class PookieGraph {
     /**
      * Open (or create) a graph. Defaults to in-memory; pass a path (`.pg`) to persist. `parser` applies to add().
      * `readOnly` opens an existing file without writing to it (no schema setup, no WAL); add() then fails.
+     * `bufferPoolMB` and `threads` bound Ladybug's memory and CPU (see Limits, DEFAULT_THREADS).
      */
     static async open(
         dbPath = ":memory:",
-        { parser = "cs-mast", backend = defaultBackend, readOnly = false }: { parser?: Parser; backend?: Backend; readOnly?: boolean } = {}
+        {
+            parser = "cs-mast",
+            backend = defaultBackend,
+            readOnly = false,
+            bufferPoolMB,
+            threads = DEFAULT_THREADS,
+        }: { parser?: Parser; backend?: Backend; readOnly?: boolean } & Limits = {}
     ): Promise<PookieGraph> {
         if (readOnly && !(await backend.exists(dbPath))) throw new Error(`taintwire: no PookieGraph at ${dbPath}`);
-        const { db, connection } = backend.open(dbPath, readOnly);
+        const { db, connection } = backend.open(dbPath, readOnly, { bufferPoolMB, threads });
         const relPairs = Object.fromEntries(Object.keys(RELS).map((r) => [r, new Set()])) as Record<Rel, Set<string>>;
         const g = new PookieGraph(db, connection, new Set(), relPairs, parser, backend);
         // Each file's source is stored once; node code is sliced from it by offset (see code()).
@@ -1115,11 +1182,13 @@ export class PookieGraph {
     }
 
     // COPY is Ladybug's bulk path; UNWIND+MATCH+CREATE for edges was ~4x slower overall.
+    // Each table's rows leave the maps once copied, so the JS heap shrinks as the load goes instead of holding every row to the end.
     private async load(nodes: Map<string, Row[]>, scopes: ScopeRow[], rels: Record<Rel, Edges>) {
         const cols = Object.keys(COLUMNS).map((c) => `r.${c}`).join(", ");
         for (const [type, rows] of nodes) {
             await this.ensureNodeTable(type);
             if (rows.length) await this.batched(`COPY \`${type}\` FROM (UNWIND $rows AS r RETURN ${cols})`, rows);
+            nodes.delete(type);
         }
         if (scopes.length) await this.batched(`COPY ${SCOPE} FROM (UNWIND $rows AS r RETURN ${Object.keys(SCOPE_COLUMNS).map((c) => `r.${c}`).join(", ")})`, scopes);
         for (const rel of Object.keys(RELS) as Rel[]) {
@@ -1129,6 +1198,7 @@ export class PookieGraph {
                 await this.ensureRelPair(rel, from, to);
                 if (rows.length)
                     await this.batched(`COPY ${rel} FROM (UNWIND $rows AS r RETURN r.from, r.to${props}) (from='${from}', to='${to}')`, rows);
+                rels[rel].delete(pair);
             }
         }
     }
