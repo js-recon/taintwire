@@ -299,7 +299,7 @@ test("regression: a 20,000-link alias chain resolves without recursion (was a st
         const { rels } = taintwire.flatten(cs(code), "chain.js");
         expect([...rels.CALLS.values()].reduce((a, e) => a + e.length, 0)).toBe(n);
     }
-});
+}, 120_000); // two 600 KB parses: 11-34 s on CI runners; quadratic would be far past this
 
 test("no duplicate call edges; save() and reopen keep them; babel builds the same", async () => {
     for (const rel of CALL_RELS) {
