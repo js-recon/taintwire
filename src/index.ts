@@ -17,8 +17,16 @@ setBackend({
         const db = new lbug.Database(dbPath, bufferPoolMB * 2 ** 20, true, readOnly, MAX_DB_SIZE);
         return { db, connection: new lbug.Connection(db, threads) as never };
     },
-    // A multi-statement query returns one result per statement.
-    rows: (res) => (Array.isArray(res) ? res[res.length - 1] : (res as lbug.QueryResult)).getAll(),
+    // A multi-statement query returns one result per statement. Each is closed once read: an open result keeps native
+    // memory until it is garbage collected, which outlives the graph's close() when graphs are opened one after another.
+    async rows(res) {
+        const all = (Array.isArray(res) ? res : [res]) as lbug.QueryResult[];
+        try {
+            return await all[all.length - 1].getAll();
+        } finally {
+            for (const r of all) r.close();
+        }
+    },
     exists: existsSync,
 });
 
