@@ -1,16 +1,16 @@
 # taintwire
 
-Babel/CS-MAST AST → LadybugDB graph library, published to npm as `@js-recon/taintwire`. Docs site source is in `docs/` (Docusaurus), served at https://taintwire.js-recon.io.
+Babel/CS-MAST AST → LadybugDB graph library, published to npm as `@js-recon/taintwire`. Docs site source (Docusaurus) is in the separate repo [js-recon/taintwire-docs](https://github.com/js-recon/taintwire-docs) (`../taintwire-docs` in the workspace), served at https://taintwire.js-recon.io.
 
 - Build: `npm run build` (tsc → `build/`, the only directory that ships)
 - Test: `npm test` (vitest)
-- Docs: `cd docs && npx docusaurus build` (fails on broken links; CI's `docs` job runs it)
+- Docs: `cd ../taintwire-docs && npx docusaurus build` (fails on broken links; that repo's CI runs it)
 
 ## Docs versions
 
-`docs/docs/` is **Next** (served at `/next`): what's on `dev`, shipped in alpha/beta releases. `/` serves the latest stable release from `docs/versioned_docs/` (`lastVersion` in `docusaurus.config.ts`, listed in `docs/versions.json`). Alpha and beta releases don't snapshot. For a stable release, run `cd docs && npx docusaurus docs:version X.Y.Z` and set `lastVersion: "X.Y.Z"` before tagging. Fix old versions in `versioned_docs/version-X.Y.Z/`, not in `docs/docs/`.
+In taintwire-docs, `docs/` is **Next** (served at `/next`): what's on its `dev`, shipped in alpha/beta releases. `/` serves the latest stable release from `versioned_docs/` (`lastVersion` in `docusaurus.config.ts`, listed in `versions.json`). Alpha and beta releases don't snapshot. For a stable release, run `npx docusaurus docs:version X.Y.Z` in taintwire-docs and set `lastVersion: "X.Y.Z"` before tagging. Fix old versions in `versioned_docs/version-X.Y.Z/`, not in `docs/`.
 
-Branding assets live in `docs/static/img/` (`banner.png`, `logo.png`, `favicon.ico`; PNGs downscaled from the originals with `sips -Z`, favicon converted with `ffmpeg`). The README pulls the banner from `raw.githubusercontent.com/.../main/...` so it renders on npmjs.com too.
+Branding assets live in taintwire-docs `static/img/` (`banner.png`, `logo.png`, `favicon.ico`; PNGs downscaled from the originals with `sips -Z`, favicon converted with `ffmpeg`). The README pulls the banner from `raw.githubusercontent.com/js-recon/taintwire-docs/main/...` so it renders on npmjs.com too.
 
 ## Branches
 
