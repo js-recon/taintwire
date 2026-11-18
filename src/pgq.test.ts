@@ -65,6 +65,26 @@ describe("validatePgq", () => {
 });
 
 describe("runPgq", { timeout: 60000 }, () => {
+    test("onRule is called after each rule, in order, a failed one too", async () => {
+        const bad: PGRule = {
+            ...rule(),
+            id: "bad",
+            return: [{ cypher: { query: "MATCH (n:Identifier) RETURN n.id AS id" } }],
+        };
+        const calls: [number, string][] = [];
+        const g = await taintwire.import(TWO_OPAQUE, { filename: "a.js", parser: "babel" });
+        try {
+            const { errors } = await taintwire.runPgq(g, [rule(), bad], (done, r) => calls.push([done, r.id]));
+            expect(errors.map((e) => e.ruleId)).toEqual(["bad"]);
+        } finally {
+            await g.close();
+        }
+        expect(calls).toEqual([
+            [1, "url_html"],
+            [2, "bad"],
+        ]);
+    });
+
     test("deep mode follows a value through two opaque calls, with the source", async () => {
         const { findings, errors } = await run(TWO_OPAQUE, [rule()]);
         expect(errors).toEqual([]);

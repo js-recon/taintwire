@@ -20,6 +20,24 @@ beforeAll(async () => {
 });
 afterAll(() => g.close());
 
+test("addFiles reports parse, link and load progress", async () => {
+    const h = await taintwire.PookieGraph.open();
+    const seen: Record<string, [number, number][]> = { parse: [], link: [], load: [] };
+    try {
+        await h.addFiles(Object.entries(FILES).map(([filename, code]) => ({ filename, code })), (stage, done, total) => seen[stage].push([done, total]));
+    } finally {
+        await h.close();
+    }
+    const n = Object.keys(FILES).length;
+    expect(seen.parse).toEqual(Array.from({ length: n }, (_, i) => [i + 1, n]));
+    expect(seen.link).toEqual([[0, 1], [1, 1]]);
+    const total = seen.load[0][1];
+    expect(total).toBeGreaterThan(0);
+    expect(seen.load.every(([, t]) => t === total)).toBe(true);
+    expect(seen.load.map(([d]) => d)).toEqual([...seen.load.map(([d]) => d)].sort((a, b) => a - b));
+    expect(seen.load.at(-1)).toEqual([total, total]);
+});
+
 const code = (r: Record<string, unknown>, p: string) => `${r[`${p}f`]}:${FILES[r[`${p}f`] as string].slice(Number(r[`${p}s`]), Number(r[`${p}e`]))}`;
 const ends = (p: string) => `${p}.file AS ${p}f, ${p}.startOffset AS ${p}s, ${p}.endOffset AS ${p}e`;
 const pairs = async (q: string, extra = "") => (await g.query(`${q} RETURN ${ends("a")}, ${ends("b")}${extra}`)).map((r) => [code(r, "a"), code(r, "b"), ...Object.keys(r).filter((k) => !/^[ab][fse]$/.test(k)).map((k) => r[k])]);

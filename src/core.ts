@@ -67,6 +67,8 @@ export interface Backend {
  * cgroup limit, if any); 0 is Ladybug's own default, a share of the host's RAM. `threads`: query threads.
  */
 export type Limits = { bufferPoolMB?: number; threads?: number };
+/** addFiles progress: files parsed, then the link walk (0/1, 1/1), then rows loaded into the database. */
+export type AddFilesProgress = (stage: "parse" | "link" | "load", done: number, total: number) => void;
 
 /** Query threads when open() isn't given a number (Ladybug's own default is one per core of the host). */
 export const DEFAULT_THREADS = 2;
@@ -1113,12 +1115,24 @@ export class PookieGraph {
      * Parse and load several files together, such as every chunk of a bundle, so that references between them
      * (a webpack module registry) resolve. Files loaded by separate calls aren't linked. Returns the File node ids, in order.
      */
-    async addFiles(files: { code: string; filename: string }[]): Promise<string[]> {
+    async addFiles(files: { code: string; filename: string }[], onProgress?: AddFilesProgress): Promise<string[]> {
         const parse = (code: string) => parseAst(code, this.parser);
-        const { rootIds, nodes, scopes, rels, evals } = flattenFiles(files.map((f) => [parse(f.code), f.filename]), { parse });
+        const units: [Node, string][] = [];
+        for (const f of files) {
+            units.push([parse(f.code), f.filename]);
+            onProgress?.("parse", units.length, files.length);
+        }
+        onProgress?.("link", 0, 1);
+        const { rootIds, nodes, scopes, rels, evals } = flattenFiles(units, { parse });
+        onProgress?.("link", 1, 1);
         // Sources first: a duplicate filename fails on the primary key before any nodes are loaded.
         for (const f of [...files, ...evals]) await this.query(`CREATE (:${SOURCE} {file: $file, code: $code})`, { file: f.filename, code: f.code });
-        await this.load(nodes, scopes, rels);
+        let total = scopes.length;
+        for (const rows of nodes.values()) total += rows.length;
+        for (const edges of Object.values(rels)) for (const rows of edges.values()) total += rows.length;
+        let done = 0;
+        onProgress?.("load", 0, total);
+        await this.load(nodes, scopes, rels, onProgress && ((n) => onProgress("load", (done += n), total)));
         return rootIds;
     }
 
@@ -1183,30 +1197,33 @@ export class PookieGraph {
 
     // COPY is Ladybug's bulk path; UNWIND+MATCH+CREATE for edges was ~4x slower overall.
     // Each table's rows leave the maps once copied, so the JS heap shrinks as the load goes instead of holding every row to the end.
-    private async load(nodes: Map<string, Row[]>, scopes: ScopeRow[], rels: Record<Rel, Edges>) {
+    private async load(nodes: Map<string, Row[]>, scopes: ScopeRow[], rels: Record<Rel, Edges>, onRows?: (n: number) => void) {
         const cols = Object.keys(COLUMNS).map((c) => `r.${c}`).join(", ");
         for (const [type, rows] of nodes) {
             await this.ensureNodeTable(type);
-            if (rows.length) await this.batched(`COPY \`${type}\` FROM (UNWIND $rows AS r RETURN ${cols})`, rows);
+            if (rows.length) await this.batched(`COPY \`${type}\` FROM (UNWIND $rows AS r RETURN ${cols})`, rows, onRows);
             nodes.delete(type);
         }
-        if (scopes.length) await this.batched(`COPY ${SCOPE} FROM (UNWIND $rows AS r RETURN ${Object.keys(SCOPE_COLUMNS).map((c) => `r.${c}`).join(", ")})`, scopes);
+        if (scopes.length) await this.batched(`COPY ${SCOPE} FROM (UNWIND $rows AS r RETURN ${Object.keys(SCOPE_COLUMNS).map((c) => `r.${c}`).join(", ")})`, scopes, onRows);
         for (const rel of Object.keys(RELS) as Rel[]) {
             const props = RELS[rel].map((p) => `, r.${p.split(" ")[0]}`).join("");
             for (const [pair, rows] of rels[rel]) {
                 const [from, to] = pair.split("\0");
                 await this.ensureRelPair(rel, from, to);
                 if (rows.length)
-                    await this.batched(`COPY ${rel} FROM (UNWIND $rows AS r RETURN r.from, r.to${props}) (from='${from}', to='${to}')`, rows);
+                    await this.batched(`COPY ${rel} FROM (UNWIND $rows AS r RETURN r.from, r.to${props}) (from='${from}', to='${to}')`, rows, onRows);
                 rels[rel].delete(pair);
             }
         }
     }
 
-    private async batched(cypher: string, rows: object[]) {
+    private async batched(cypher: string, rows: object[], onRows?: (n: number) => void) {
         const stmt = await this.connection.prepare(cypher);
-        for (let i = 0; i < rows.length; i += BATCH_SIZE)
-            await this.backend.rows(await this.connection.execute(stmt, { rows: rows.slice(i, i + BATCH_SIZE) })); // frees WASM results
+        for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+            const batch = rows.slice(i, i + BATCH_SIZE);
+            await this.backend.rows(await this.connection.execute(stmt, { rows: batch })); // frees WASM results
+            onRows?.(batch.length);
+        }
     }
 
     private async ensureNodeTable(type: string) {
