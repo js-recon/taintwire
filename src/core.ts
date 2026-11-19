@@ -441,7 +441,8 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         if (node.type === "CallExpression" || node.type === "OptionalCallExpression") calls.push(node);
         if (node.type === "MemberExpression") members.push(node);
         if (node.type === "AssignmentExpression" && node.operator === "=") assigns.push(node);
-        if (ESM_DECLS.has(node.type) || node.type === "ImportExpression") esm.push([node, file]);
+        // import(): an ImportExpression (babel parser) or a call whose callee is `Import` (cs-mast)
+        if (ESM_DECLS.has(node.type) || node.type === "ImportExpression" || (node.type === "CallExpression" && node.callee.type === "Import")) esm.push([node, file]);
         const [src] = (node as Node & { arguments?: Node[] }).arguments ?? [];
         if (parse && node.type === "CallExpression" && node.callee.type === "Identifier" && node.callee.name === "eval" && src?.type === "StringLiteral") {
             let evaluated: Node | undefined;
@@ -763,9 +764,11 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     for (const [n, file] of esm as [Any, string][]) {
         const fac = roots.get(file);
         if (!fac) continue; // an eval's virtual file
-        const target = n.source?.type === "StringLiteral" ? resolveSpec(file, n.source.value) : undefined;
+        const dynamic = n.type === "ImportExpression" || n.type === "CallExpression";
+        const src = n.type === "CallExpression" ? n.arguments[0] : n.source;
+        const target = src?.type === "StringLiteral" ? resolveSpec(file, src.value) : undefined;
         if (target !== undefined) esmNeeds.push(target);
-        if (n.type === "ImportExpression") {
+        if (dynamic) {
             if (target !== undefined) dynTarget.set(n, target);
             continue;
         }
@@ -865,7 +868,7 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     // or `p.then(() => require(id))`.
     const promiseNs = (p0: Any | null | undefined, seen = new Set<Node>()): string | undefined => {
         const p = follow(p0, seen);
-        if (p?.type === "ImportExpression") return dynTarget.get(p);
+        if (p && dynTarget.has(p)) return dynTarget.get(p);
         if (p?.type === "CallExpression" && loaderOf(p) !== undefined) {
             const loaders = (factories.get(loaderOf(p)!) ?? []).flatMap((fac) => whole.get(fac) ?? []);
             const ids = new Set(loaders.flatMap((l) => getterValues(l)).map((r) => promiseNs(r, seen)));
