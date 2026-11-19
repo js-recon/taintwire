@@ -89,3 +89,16 @@ test("Rolldown: import(`./m.js`).then(e => e.a) reads an exported getter-object 
         await h.close();
     }
 });
+
+test("Rolldown: a preload wrapper's .then param gets the namespace object (resolved while import() params are set)", async () => {
+    const h = await taintwire.PookieGraph.open();
+    try {
+        await h.addFiles([
+            { filename: "assets/m.js", code: "var t=(e=>e)({getName:()=>n});function n(){return window.name}export{t as a};" },
+            { filename: "assets/index.js", code: "const r=(f,d)=>f();r(()=>import(`./m.js`).then(e=>e.a),[]).then(m=>{m1.innerHTML=m.getName()});" },
+        ]);
+        expect((await sinks(h)).hit).toEqual(["m.getName()"]);
+    } finally {
+        await h.close();
+    }
+});

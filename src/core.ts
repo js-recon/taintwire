@@ -809,6 +809,20 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         }
     }
 
+    // Declared before nsOf(), which can reach it (through nsObjectOf) while the import() params are being set.
+    // A factory's own exports, or those of the namespace(s) Turbopack's `ctx.n(ns)` made its namespace.
+    const valuesOf = (id: string | undefined, key: string, seen = new Set<string>()): Node[] => {
+        if (id === undefined || seen.has(id)) return [];
+        seen.add(id);
+        return (factories.get(id) ?? []).flatMap(
+            (fac) =>
+                exported.get(fac)?.get(key) ?? [
+                    ...(nsAlias.get(fac) ?? []).flatMap((ns) => valuesOf(nsOf(ns), key, seen)),
+                    ...(reexp.get(fac)?.get(key) ?? []).flatMap(([m, k]) => valuesOf(m, k, new Set(seen))),
+                    ...(key === "default" ? [] : (star.get(fac) ?? []).flatMap((m) => valuesOf(m, key, new Set(seen)))),
+                ]
+        );
+    };
     // Namespaces. `nsOf(e)` is the module id whose namespace `e` is: `require(id)`, `require.t(id, mode)`, a binding whose
     // one definition is one, `require.n(ns)()` (webpack 5) or `require.n(ns).a` (webpack 4), a call of a function that
     // returns one (`a = () => require(1)`, `require.cw(body)`), `await` of an import() promise, or an import() callback's param.
@@ -924,12 +938,21 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         }
         return returnedNs(cb, seen);
     };
-    for (const c of cs) {
-        // An import() callback's first param is the namespace, unless something else is assigned to it.
+    // An import() callback's first param is the namespace, unless something else is assigned to it. Repeated until
+    // nothing changes: a callback's promise can depend on another callback's param (`p(() => import(m).then(e => e.a))
+    // .then(ns => ...)`), and calls aren't visited in dependency order.
+    const thens = (cs as Any[]).flatMap((c) => {
         const cb = c.callee.type === "MemberExpression" && keyOf(c.callee) === "then" ? (c.arguments[0] as Any | undefined) : undefined;
         const p = cb && isFunction(cb) && cb.params[0]?.type === "Identifier" ? binding(cb.params[0]) : undefined;
-        const id = p && defs.get(p)?.length === 1 ? promiseNs(c.callee.object) : undefined;
-        if (id !== undefined) paramNs.set(p!, id);
+        return p && defs.get(p)?.length === 1 ? [[c, p] as const] : [];
+    });
+    for (let changed = true, round = 0; changed && round < 8; round++) {
+        changed = false;
+        for (const [c, p] of thens) {
+            if (paramNs.has(p)) continue;
+            const id = promiseNs(c.callee.object);
+            if (id !== undefined) paramNs.set(p, id), (changed = true);
+        }
     }
     // IMPORTS: each call that loads a module, synchronously or for an import(). `needs` keeps every module id loaded,
     // also those no factory in these files defines (another file's), for moduleLinks().
@@ -952,19 +975,6 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     for (const [fac, vs] of whole)
         if (turboFacs.has(fac)) for (const v of vs as Any[]) if (isFunction(v) && v.params[0]?.type === "Identifier") loaderParams.add(binding(v.params[0])!);
     for (const c of cs) if (c.callee.type === "Identifier" && loaderParams.has(refers.get(c.callee)!) && lit(c.arguments[0]) !== undefined) needs.add(lit(c.arguments[0])!);
-    // A factory's own exports, or those of the namespace(s) Turbopack's `ctx.n(ns)` made its namespace.
-    const valuesOf = (id: string | undefined, key: string, seen = new Set<string>()): Node[] => {
-        if (id === undefined || seen.has(id)) return [];
-        seen.add(id);
-        return (factories.get(id) ?? []).flatMap(
-            (fac) =>
-                exported.get(fac)?.get(key) ?? [
-                    ...(nsAlias.get(fac) ?? []).flatMap((ns) => valuesOf(nsOf(ns), key, seen)),
-                    ...(reexp.get(fac)?.get(key) ?? []).flatMap(([m, k]) => valuesOf(m, k, new Set(seen))),
-                    ...(key === "default" ? [] : (star.get(fac) ?? []).flatMap((m) => valuesOf(m, key, new Set(seen)))),
-                ]
-        );
-    };
     // The value(s) `ns.key` / `ns["key"]` reads, or undefined if `ns` isn't a namespace or doesn't export `key`.
     const imported = (m: Any): Node[] | undefined => {
         const key = keyOf(m);
