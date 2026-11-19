@@ -1,5 +1,5 @@
 // Test helpers shared by the semantic suites. Not part of the build (see tsconfig.json).
-import { moduleLinks, planUnits, PookieGraph } from "./index.js";
+import { moduleLinks, planUnits, PookieGraph } from "../src/index.js";
 
 /**
  * Every `rel` edge starting in `file`, as sorted "a -> b" strings: Identifiers as `name`, or `name:decl` for a

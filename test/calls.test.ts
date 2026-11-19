@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import * as taintwire from "./index.js";
+import * as taintwire from "../src/index.js";
 import { edgeList, reaches } from "./test-utils.js";
 import { cs_mast_init } from "@shriyanss/cs-mast";
 import type { Node } from "@babel/types";
@@ -332,7 +332,7 @@ test("no duplicate call edges; save() and reopen keep them; babel builds the sam
 test("call edges over the fixtures and every case: each edge is consistent with CALLS", async () => {
     const h = await taintwire.PookieGraph.open();
     for (const f of ["modern.js", "webpack-vue.js", "component.tsx"])
-        await h.add(readFileSync(new URL(`../test/${f}`, import.meta.url), "utf-8"), f);
+        await h.add(readFileSync(new URL(`./fixtures/${f}`, import.meta.url), "utf-8"), f);
     for (const [name, src] of Object.entries(SRC)) await h.add(src, file(name)); // the fixtures alone resolve few calls
     const zero = async (q: string) => expect((await h.query(q))[0].n, q).toBe(0);
     // ARGUMENT_TO: the source is an argument of the callsite it names, and the target is a param of a function that callsite CALLS

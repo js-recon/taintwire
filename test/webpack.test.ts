@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "vitest";
-import * as taintwire from "./index.js";
+import * as taintwire from "../src/index.js";
 import { linkedVsUnits, sinks } from "./test-utils.js";
 
 // Chunks in the shapes webpack 5.112 emits (see docs/bundlers/webpack.md): source and sink in different files.

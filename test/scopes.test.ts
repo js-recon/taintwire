@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256 } from "@shriyanss/cs-mast";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import * as taintwire from "./index.js";
+import * as taintwire from "../src/index.js";
 
 const G = "global:Program";
 const M = "module:Program";
@@ -154,9 +154,9 @@ test("P: scope provenance and deterministic signatures", async () => {
 });
 
 test("Q: one scope per owner, one IN_SCOPE per DECLARES, no duplicate edges", async () => {
-    await g.add(readFileSync(new URL("../test/modern.js", import.meta.url), "utf-8"), "modern.js");
-    await g.add(readFileSync(new URL("../test/webpack-vue.js", import.meta.url), "utf-8"), "webpack-vue.js");
-    await g.add(readFileSync(new URL("../test/component.tsx", import.meta.url), "utf-8"), "component.tsx");
+    await g.add(readFileSync(new URL("./fixtures/modern.js", import.meta.url), "utf-8"), "modern.js");
+    await g.add(readFileSync(new URL("./fixtures/webpack-vue.js", import.meta.url), "utf-8"), "webpack-vue.js");
+    await g.add(readFileSync(new URL("./fixtures/component.tsx", import.meta.url), "utf-8"), "component.tsx");
     const one = async (q: string) => expect((await g.query(q)).filter((r) => r.n !== 1)).toEqual([]);
     await one("MATCH (o)-[:CREATES_SCOPE]->(s:Scope) RETURN o.id AS o, count(s) AS n");
     await one("MATCH (o)-[:CREATES_SCOPE]->(s:Scope) RETURN s.id AS s, count(o) AS n");

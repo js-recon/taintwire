@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import * as taintwire from "./index.js";
-import type { PGCypher, PGRule, PGSelector } from "./index.js";
+import * as taintwire from "../src/index.js";
+import type { PGCypher, PGRule, PGSelector } from "../src/index.js";
 
 const AT = "n.file AS file, n.line AS line, n.col AS col";
 const urlSource: PGSelector = {

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import * as taintwire from "./index.js";
+import * as taintwire from "../src/index.js";
 
 // snippet -> sorted "SourceType -> name" DECLARES edges
 const CASES: [string, string[]][] = [
@@ -62,8 +62,8 @@ test.each(CASES.map(([src, want], i) => [src, want, i] as const))("%s", async (_
 });
 
 test("only binding-introducing nodes produce DECLARES, and targets are Identifiers", async () => {
-    await g.add(readFileSync(new URL("../test/modern.js", import.meta.url), "utf-8"), "modern.js");
-    await g.add(readFileSync(new URL("../test/webpack-vue.js", import.meta.url), "utf-8"), "webpack-vue.js");
+    await g.add(readFileSync(new URL("./fixtures/modern.js", import.meta.url), "utf-8"), "modern.js");
+    await g.add(readFileSync(new URL("./fixtures/webpack-vue.js", import.meta.url), "utf-8"), "webpack-vue.js");
     const producers = ["VariableDeclarator", "FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression", "ClassDeclaration", "ClassExpression", "ObjectMethod", "ClassMethod", "ClassPrivateMethod", "ImportSpecifier", "ImportDefaultSpecifier", "ImportNamespaceSpecifier", "CatchClause"];
     for (const r of await g.query("MATCH (a)-[:DECLARES]->(b) RETURN DISTINCT a.type AS a, b.type AS b")) {
         expect(producers).toContain(r.a);

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import * as taintwire from "./index.js";
+import * as taintwire from "../src/index.js";
 
 const SEMANTIC = ["REFERS_TO", "READS", "WRITES", "FLOWS_TO"] as const;
 
@@ -702,7 +702,7 @@ test("adversarial non-references: names that collide with declared bindings", as
 test("21: idempotent and well formed over the fixtures", async () => {
     const h = await taintwire.PookieGraph.open();
     const fixtures = ["modern.js", "webpack-vue.js", "component.tsx"];
-    for (const f of fixtures) await h.add(readFileSync(new URL(`../test/${f}`, import.meta.url), "utf-8"), f);
+    for (const f of fixtures) await h.add(readFileSync(new URL(`./fixtures/${f}`, import.meta.url), "utf-8"), f);
     for (const rel of SEMANTIC) {
         const [dup] = await h.query(
             `MATCH (a)-[e:${rel}]->(b) WITH a.id AS a, b.id AS b, e.access AS x, count(e) AS n WHERE n > 1 RETURN count(*) AS n`.replace(
@@ -752,11 +752,11 @@ test("21: idempotent and well formed over the fixtures", async () => {
         return out.sort();
     };
     const again = await taintwire.PookieGraph.open();
-    for (const f of fixtures) await again.add(readFileSync(new URL(`../test/${f}`, import.meta.url), "utf-8"), f);
+    for (const f of fixtures) await again.add(readFileSync(new URL(`./fixtures/${f}`, import.meta.url), "utf-8"), f);
     expect(await snap(again)).toEqual(await snap(h));
     // the babel parser gives the same edges, with null signatures
     const babel = await taintwire.PookieGraph.open(":memory:", { parser: "babel" });
-    for (const f of fixtures) await babel.add(readFileSync(new URL(`../test/${f}`, import.meta.url), "utf-8"), f);
+    for (const f of fixtures) await babel.add(readFileSync(new URL(`./fixtures/${f}`, import.meta.url), "utf-8"), f);
     expect(await snap(babel, false)).toEqual(await snap(h, false));
     const [nul] = await babel.query("MATCH ()-[e:READS]->() RETURN count(e) AS n, count(e.access_signature) AS s");
     expect(nul.n).toBeGreaterThan(0);

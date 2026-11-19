@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { afterAll, expect, test } from "vitest";
-import * as taintwire from "./index.js";
+import * as taintwire from "../src/index.js";
 const { wasmBackend } = taintwire;
 
 // The nodejs variant of @ladybugdb/wasm-core has the browser build's API, so this exercises the browser backend.

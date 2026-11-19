@@ -278,6 +278,8 @@ const PASS_METHODS = new Set(["slice", "substring", "substr", "trim", "trimStart
 
 // TS nodes whose `expression` is a runtime value; every other Identifier under a TS node is type-level.
 const TS_VALUES = new Set(["TSAsExpression", "TSSatisfiesExpression", "TSNonNullExpression", "TSTypeAssertion", "TSInstantiationExpression", "TSExportAssignment"]);
+// The declarations of ES-module syntax, walked for the ESM pass in flattenFiles().
+const ESM_DECLS = new Set(["ImportDeclaration", "ExportNamedDeclaration", "ExportDefaultDeclaration", "ExportAllDeclaration"]);
 
 /** Whether the Identifier at `parent[key]` is a lexical name lookup, not a property name, label, import/export name or type. */
 export function isRef(parent: Node, key: string): boolean {
@@ -391,6 +393,7 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     const assigns: Node[] = []; // `=` assignments, for CommonJS exports
     const evals: { filename: string; code: string }[] = [];
     const returns = new Map<Node, Node[]>(); // function -> the ReturnStatements it owns (not its nested functions')
+    const esm: [Node, string][] = []; // import/export declarations and import() expressions, with their file
 
     // Iterative walk: minified bundles nest deep enough to blow the JS stack.
     // Each entry carries its parent, the scopes it sits in (`scope` for lexical bindings, `varScope` for var,
@@ -438,6 +441,7 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         if (node.type === "CallExpression" || node.type === "OptionalCallExpression") calls.push(node);
         if (node.type === "MemberExpression") members.push(node);
         if (node.type === "AssignmentExpression" && node.operator === "=") assigns.push(node);
+        if (ESM_DECLS.has(node.type) || node.type === "ImportExpression") esm.push([node, file]);
         const [src] = (node as Node & { arguments?: Node[] }).arguments ?? [];
         if (parse && node.type === "CallExpression" && node.callee.type === "Identifier" && node.callee.name === "eval" && src?.type === "StringLiteral") {
             let evaluated: Node | undefined;
@@ -728,10 +732,83 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         for (const fac of factories.get(loaderOf(c)!) ?? [])
             for (const v of whole.get(fac) ?? []) if (isFunction(v) && v.params[0]?.type === "Identifier") requires.add(binding(v.params[0])!);
 
+    // ES modules (docs/bundlers/esm.md): Vite/Rollup/esbuild chunks import each other with `import {k as x} from "./c.js"`.
+    // Each file with import/export syntax is a module whose id is its filename, with the File node as its factory, so
+    // `exported`, `valuesOf()`, `nsOf()` and `leaves()` treat it like a registry module. Specifiers resolve like a browser
+    // does from the chunk's own path: relative to the importing file, or (absolute or a full URL) to the one file whose
+    // path ends with it.
+    const roots = new Map(units.map(([ast, file]) => [file, ast]));
+    const esmFiles = new Set<string>();
+    const esmNeeds: string[] = [];
+    const reexp = new Map<Node, Map<string, [string, string][]>>(); // export {x as y} from "./m": fac -> y -> [m, x]
+    const star = new Map<Node, string[]>(); // export * from "./m"
+    const namedImports: [Node, string, string][] = []; // [import binding, module id, imported name]
+    const nsImports: [Node, string][] = []; // import * as ns from "./m"
+    const dynTarget = new Map<Node, string>(); // import("./m") -> m
+    const resolveSpec = (from: string, spec: string): string | undefined => {
+        let s = spec.replace(/[?#].*$/, "");
+        const url = /^[a-z][\w+.-]*:\/\/[^/]*(\/.*)$/i.exec(s);
+        if (url) s = url[1];
+        if (!s.startsWith(".") && !s.startsWith("/")) return; // a bare package name: not in these files
+        const parts: string[] = [];
+        for (const p of (s.startsWith("/") ? s : from.split("/").slice(0, -1).join("/") + "/" + s).split("/"))
+            if (p === "..") parts.pop();
+            else if (p && p !== ".") parts.push(p);
+        const joined = parts.join("/");
+        if (roots.has(joined) || !s.startsWith("/")) return joined;
+        const hits = [...roots.keys()].filter((f) => joined.endsWith("/" + f) || f.endsWith("/" + joined));
+        return hits.length === 1 ? hits[0] : joined;
+    };
+    const nameOf = (n: Any) => (n.type === "Identifier" ? n.name : String(n.value));
+    for (const [n, file] of esm as [Any, string][]) {
+        const fac = roots.get(file);
+        if (!fac) continue; // an eval's virtual file
+        const target = n.source?.type === "StringLiteral" ? resolveSpec(file, n.source.value) : undefined;
+        if (target !== undefined) esmNeeds.push(target);
+        if (n.type === "ImportExpression") {
+            if (target !== undefined) dynTarget.set(n, target);
+            continue;
+        }
+        if (!esmFiles.has(file)) esmFiles.add(file), (factories.get(file) ?? factories.set(file, []).get(file)!).push(fac);
+        if (n.type === "ImportDeclaration") {
+            if (target === undefined) continue;
+            if (roots.has(target)) edge("IMPORTS", n, roots.get(target)!, { module_id: target });
+            for (const sp of n.specifiers as Any[]) {
+                const local = binding(sp.local);
+                if (!local) continue;
+                if (sp.type === "ImportNamespaceSpecifier") nsImports.push([local, target]);
+                else namedImports.push([local, target, sp.type === "ImportDefaultSpecifier" ? "default" : nameOf(sp.imported)]);
+            }
+        } else if (n.type === "ExportAllDeclaration") {
+            if (target !== undefined) (star.get(fac) ?? star.set(fac, []).get(fac)!).push(target);
+        } else if (n.type === "ExportDefaultDeclaration") {
+            const d = n.declaration;
+            const id = (d as Any).id as Node | undefined;
+            add(fac, "default", [isFunction(d) || !id ? d : (binding(id) ?? d)]);
+        } else if (n.source) {
+            // export {x as y} from "./m"; `export * as ns from` is left out (a namespace object, needs property flow)
+            for (const sp of n.specifiers as Any[]) {
+                if (sp.type !== "ExportSpecifier" || target === undefined) continue;
+                const keys = reexp.get(fac) ?? reexp.set(fac, new Map()).get(fac)!;
+                const y = nameOf(sp.exported);
+                (keys.get(y) ?? keys.set(y, []).get(y)!).push([target, nameOf(sp.local)]);
+            }
+        } else {
+            for (const sp of n.specifiers as Any[]) {
+                const d = sp.type === "ExportSpecifier" ? refers.get(sp.local) : undefined;
+                if (d) add(fac, nameOf(sp.exported), [d]);
+            }
+            const decl = n.declaration;
+            const ids = !decl ? [] : decl.type === "VariableDeclaration" ? decl.declarations.flatMap((v: Any) => bindingIds(v.id)) : decl.id ? [decl.id] : [];
+            for (const id of ids as Any[]) add(fac, id.name, [binding(id) ?? id]);
+        }
+    }
+
     // Namespaces. `nsOf(e)` is the module id whose namespace `e` is: `require(id)`, `require.t(id, mode)`, a binding whose
     // one definition is one, `require.n(ns)()` (webpack 5) or `require.n(ns).a` (webpack 4), a call of a function that
     // returns one (`a = () => require(1)`, `require.cw(body)`), `await` of an import() promise, or an import() callback's param.
     const paramNs = new Map<Node, string>();
+    for (const [local, id] of nsImports) paramNs.set(local, id);
     const single = (e: Any) => {
         const d = refers.get(e);
         const vs = d && defs.get(d);
@@ -747,7 +824,7 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         return e;
     };
     const nsOf = (e0: Any | null | undefined, seen = new Set<Node>()): string | undefined => {
-        if (!requires.size && !ctxOf.size) return; // no webpack or Turbopack runtime in these files
+        if (!requires.size && !ctxOf.size && !esmFiles.size && !dynTarget.size) return; // no module system in these files
         const e = follow(e0, seen);
         if (!e || seen.has(e)) return;
         seen.add(e);
@@ -788,12 +865,19 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     // or `p.then(() => require(id))`.
     const promiseNs = (p0: Any | null | undefined, seen = new Set<Node>()): string | undefined => {
         const p = follow(p0, seen);
+        if (p?.type === "ImportExpression") return dynTarget.get(p);
         if (p?.type === "CallExpression" && loaderOf(p) !== undefined) {
             const loaders = (factories.get(loaderOf(p)!) ?? []).flatMap((fac) => whole.get(fac) ?? []);
             const ids = new Set(loaders.flatMap((l) => getterValues(l)).map((r) => promiseNs(r, seen)));
             return ids.size === 1 ? [...ids][0] : undefined;
         }
-        if (p?.type !== "CallExpression" || p.callee.type !== "MemberExpression" || keyOf(p.callee) !== "then") return;
+        if (p?.type !== "CallExpression") return;
+        // Vite's `__vitePreload(() => import("./m.js"), deps)`: a call whose first argument returns an import()
+        if ((p.callee.type !== "MemberExpression" || keyOf(p.callee) !== "then") && isFunction(p.arguments[0])) {
+            const ids = new Set(getterValues(p.arguments[0]).map((r) => promiseNs(r, seen)));
+            return ids.size === 1 ? [...ids][0] : undefined;
+        }
+        if (p.callee.type !== "MemberExpression" || keyOf(p.callee) !== "then") return;
         const cb = p.arguments[0] as Any | undefined;
         if (cb?.type === "CallExpression" && cb.callee.type === "MemberExpression" && keyOf(cb.callee) === "bind") {
             const o = cb.callee.object;
@@ -811,7 +895,7 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     }
     // IMPORTS: each call that loads a module, synchronously or for an import(). `needs` keeps every module id loaded,
     // also those no factory in these files defines (another file's), for moduleLinks().
-    const needs = new Set<string>();
+    const needs = new Set<string>(esmNeeds);
     for (const c of cs) {
         const { callee: f, arguments: args } = c;
         const id = isReq(f) && args.length === 1 ? lit(args[0])
@@ -834,7 +918,14 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
     const valuesOf = (id: string | undefined, key: string, seen = new Set<string>()): Node[] => {
         if (id === undefined || seen.has(id)) return [];
         seen.add(id);
-        return (factories.get(id) ?? []).flatMap((fac) => exported.get(fac)?.get(key) ?? (nsAlias.get(fac) ?? []).flatMap((ns) => valuesOf(nsOf(ns), key, seen)));
+        return (factories.get(id) ?? []).flatMap(
+            (fac) =>
+                exported.get(fac)?.get(key) ?? [
+                    ...(nsAlias.get(fac) ?? []).flatMap((ns) => valuesOf(nsOf(ns), key, seen)),
+                    ...(reexp.get(fac)?.get(key) ?? []).flatMap(([m, k]) => valuesOf(m, k, new Set(seen))),
+                    ...(key === "default" ? [] : (star.get(fac) ?? []).flatMap((m) => valuesOf(m, key, new Set(seen)))),
+                ]
+        );
     };
     // The value(s) `ns.key` / `ns["key"]` reads, or undefined if `ns` isn't a namespace or doesn't export `key`.
     const imported = (m: Any): Node[] | undefined => {
@@ -847,6 +938,14 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         const id = nsOf(e);
         return id === undefined ? undefined : (factories.get(id) ?? []).flatMap((fac) => whole.get(fac) ?? []);
     };
+    // A named/default import binding is the exported value(s): its definitions (replacing the unknown one an import
+    // declaration gives it) and FLOWS_TO into it. Left unknown when the module or the name isn't in these files.
+    for (const [local, id, key] of namedImports) {
+        const vs = valuesOf(id, key);
+        if (!vs.length) continue;
+        defs.set(local, vs);
+        for (const v of vs) edge("FLOWS_TO", v, local);
+    }
     for (const m of members) {
         for (const v of imported(m) ?? []) edge("FLOWS_TO", v, m);
         if (keyOf(m) === "a") for (const v of nsValue(m) ?? []) edge("FLOWS_TO", v, m);
@@ -881,7 +980,8 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
                     out.fns.add(v);
                     break;
                 case "Identifier": {
-                    const d = refers.get(v);
+                    // a use, or a declaration standing for its binding (an ES module's export)
+                    const d = refers.get(v) ?? (declScope.has(v) ? binding(v) : undefined);
                     if (d) out.deps.push(d);
                     else out.unknown = true;
                     break;

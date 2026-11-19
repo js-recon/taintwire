@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { planUnits, type ModuleLinks } from "./index.js";
+import { planUnits, type ModuleLinks } from "../src/index.js";
 
 const plan = (links: Record<string, Partial<ModuleLinks>>) =>
     planUnits(new Map(Object.entries(links).map(([f, l]) => [f, { defines: l.defines ?? [], needs: l.needs ?? [] }])));

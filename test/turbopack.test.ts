@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "vitest";
-import * as taintwire from "./index.js";
+import * as taintwire from "../src/index.js";
 import { linkedVsUnits } from "./test-utils.js";
 
 // Chunks as Next.js 16.4 (Turbopack) emits them for js-recon-research turbopack/cross-chunk-shapes, trimmed to the modules

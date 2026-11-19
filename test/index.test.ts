@@ -2,9 +2,9 @@ import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import * as taintwire from "./index.js";
+import * as taintwire from "../src/index.js";
 
-const code = readFileSync(new URL("../test/webpack-vue.js", import.meta.url), "utf-8");
+const code = readFileSync(new URL("./fixtures/webpack-vue.js", import.meta.url), "utf-8");
 
 test("imports webpack chunk as AST graph", async () => {
     const g = await taintwire.import(code, { filename: "app.abc123.js" });
@@ -119,8 +119,8 @@ test("babel parser builds the same tree without signatures", async () => {
 });
 
 test("cs-mast hashes every node type in modern JS, TypeScript and JSX", async () => {
-    const g = await taintwire.import(readFileSync(new URL("../test/modern.js", import.meta.url), "utf-8"), { filename: "modern.js" });
-    await g.add(readFileSync(new URL("../test/component.tsx", import.meta.url), "utf-8"), "component.tsx");
+    const g = await taintwire.import(readFileSync(new URL("./fixtures/modern.js", import.meta.url), "utf-8"), { filename: "modern.js" });
+    await g.add(readFileSync(new URL("./fixtures/component.tsx", import.meta.url), "utf-8"), "component.tsx");
     const types = await g.query("MATCH (n) WHERE n.type IS NOT NULL RETURN n.type AS type, count(*) AS total, count(n.hash) AS hashed");
     expect(types.length).toBeGreaterThan(100);
     expect(types.filter((t) => t.hashed !== t.total).map((t) => t.type)).toEqual([]);

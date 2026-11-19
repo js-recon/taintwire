@@ -1,7 +1,7 @@
 // Findings and extra invariants from the post-implementation validation (VALIDATION_REPORT.md).
 import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import * as taintwire from "./index.js";
+import * as taintwire from "../src/index.js";
 
 const SRC: Record<string, string> = {
     // TS nodes whose child keys differ between cs-mast's Babel 7 and our Babel 8
@@ -16,7 +16,7 @@ let g: taintwire.PookieGraph;
 beforeAll(async () => {
     g = await taintwire.PookieGraph.open();
     for (const [name, src] of Object.entries(SRC)) await g.add(src, file(name));
-    for (const f of ["modern.js", "webpack-vue.js", "component.tsx"]) await g.add(readFileSync(new URL(`../test/${f}`, import.meta.url), "utf-8"), f);
+    for (const f of ["modern.js", "webpack-vue.js", "component.tsx"]) await g.add(readFileSync(new URL(`./fixtures/${f}`, import.meta.url), "utf-8"), f);
 });
 afterAll(() => g.close());
 
