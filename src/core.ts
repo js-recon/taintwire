@@ -766,7 +766,9 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         if (!fac) continue; // an eval's virtual file
         const dynamic = n.type === "ImportExpression" || n.type === "CallExpression";
         const src = n.type === "CallExpression" ? n.arguments[0] : n.source;
-        const target = src?.type === "StringLiteral" ? resolveSpec(file, src.value) : undefined;
+        // Rolldown writes import(`./c.js`): a template literal with no expressions is a plain string too
+        const spec = src?.type === "StringLiteral" ? src.value : src?.type === "TemplateLiteral" && !src.expressions.length ? src.quasis[0].value.cooked : undefined;
+        const target = typeof spec === "string" ? resolveSpec(file, spec) : undefined;
         if (target !== undefined) esmNeeds.push(target);
         if (dynamic) {
             if (target !== undefined) dynTarget.set(n, target);
@@ -841,14 +843,47 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
                 if (isCtx(e.callee, "i") || isCtx(e.callee, "r")) return lit(e.arguments[0]); // Turbopack import / require
                 if (isHelper(e.callee, "t") && Number(lit(e.arguments[1])) & 1) return lit(e.arguments[0]); // mode & 1: require it
                 return returnedNs(e.callee, seen);
-            case "MemberExpression":
-                if (keyOf(e) === "a") return interopNs(e.object, seen);
+            case "MemberExpression": {
+                const before = new Set(seen); // interopNs marks e.object as seen
+                if (keyOf(e) === "a") {
+                    const id = interopNs(e.object, seen);
+                    if (id !== undefined) return id;
+                }
+                const obj = nsObjectOf(e, before);
+                if (obj !== undefined) return obj;
                 if (keyOf(e) !== "default") return;
                 // `ns.default` of a CommonJS module is module.exports, read like the namespace itself (Turbopack's
                 // `ctx.i(cjs).default.k`); left to `imported()` for an ES module's own default.
                 const id = nsOf(e.object, seen);
                 return id !== undefined && (factories.get(id) ?? []).some((fac) => whole.has(fac)) ? id : undefined;
+            }
         }
+    };
+    // Rolldown (Vite 8) gives an import() of a module a namespace object built by a helper and exported like any
+    // value: `t = helper({NAME: () => r, getName: () => n})`, `export {t as a}`, read as `import("./m.js").then(e => e.a)`.
+    // `ns.k` of such an exported getter object is a namespace of its own, `ns@<call>`, whose keys are the getters' values.
+    const nsObjects = new Map<Node, string>();
+    const isNsObject = (c: Any) =>
+        c?.type === "CallExpression" &&
+        c.arguments[0]?.type === "ObjectExpression" &&
+        c.arguments[0].properties.length > 0 &&
+        (c.arguments[0].properties as Any[]).every(
+            (p) => p.type === "ObjectProperty" && !p.computed && p.value.type === "ArrowFunctionExpression" && !p.value.params.length && p.value.body.type !== "BlockStatement"
+        );
+    const nsObjectOf = (m: Any, seen: Set<Node>): string | undefined => {
+        const key = keyOf(m);
+        if (key === undefined) return;
+        for (const v of valuesOf(nsOf(m.object, seen), key) as Any[])
+            for (const c of (declScope.has(v) ? defs.get(binding(v)!) ?? [] : [v]) as Any[]) {
+                if (!isNsObject(c)) continue;
+                if (!nsObjects.has(c)) {
+                    const id = `ns@${idOf(c)}`;
+                    nsObjects.set(c, id);
+                    factories.set(id, [c]);
+                    for (const p of c.arguments[0].properties as Any[]) add(c, p.key.type === "Identifier" ? p.key.name : lit(p.key), [p.value.body]);
+                }
+                return nsObjects.get(c);
+            }
     };
     // The namespace calling `g` returns.
     const returnedNs = (g0: Any | null | undefined, seen: Set<Node>): string | undefined => {
@@ -1113,7 +1148,7 @@ export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code
         }
     }
     // `cw@...` factories are inline CommonJS bodies, not registry ids another file can load.
-    const defines = [...factories.keys()].filter((id) => !id.startsWith("cw@"));
+    const defines = [...factories.keys()].filter((id) => !id.startsWith("cw@") && !id.startsWith("ns@"));
     return { rootIds: units.map(([ast]) => idOf(ast)), nodes, scopes, rels, evals, defines, needs: [...needs] };
 }
 

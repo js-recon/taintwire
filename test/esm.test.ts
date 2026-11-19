@@ -68,3 +68,24 @@ test("moduleLinks/planUnits: a file defines itself and needs what it imports", a
     const { linked, units } = await linkedVsUnits(FILES);
     expect(units).toEqual(linked);
 });
+
+test("Rolldown: import(`./m.js`).then(e => e.a) reads an exported getter-object namespace", async () => {
+    const h = await taintwire.PookieGraph.open();
+    try {
+        await h.addFiles([
+            {
+                filename: "assets/m.js",
+                code: "var e=Object.defineProperty,t=((t,n)=>{let r={};for(var i in t)e(r,i,{get:t[i],enumerable:!0});return r})({getName:()=>n,clean:()=>a});function n(){return window.name}var a=()=>`static`;export{t as a,n as r};",
+            },
+            {
+                filename: "assets/index.js",
+                code: "const r=(f,d)=>f();(async()=>{let e=await r(()=>import(`./m.js`).then(e=>e.a),[]);m1.innerHTML=e.getName();m2.innerHTML=e.clean()})();",
+            },
+        ]);
+        const { hit, clean } = await sinks(h);
+        expect(hit).toEqual(["e.getName()"]);
+        expect(clean).toEqual(["e.clean()"]);
+    } finally {
+        await h.close();
+    }
+});
