@@ -99,7 +99,9 @@ export function scopeRow(kind: ScopeKind, owner: Node, file: string): ScopeRow {
 // Builtins whose result carries their input (arg 0 for functions, the receiver for methods), for value flow through
 // unresolved calls. Encoders (encodeURIComponent, escape) are left out on purpose: their output is safe in HTML.
 export const PASS_FNS = new Set(["decodeURIComponent", "decodeURI", "unescape", "String", "Object"]);
-export const PASS_METHODS = new Set(["slice", "substring", "substr", "trim", "trimStart", "trimEnd", "toLowerCase", "toUpperCase", "padStart", "padEnd", "repeat", "normalize", "replace", "replaceAll", "toString", "valueOf", "at", "concat"]);
+export const PASS_METHODS = new Set(["slice", "substring", "substr", "trim", "trimStart", "trimEnd", "toLowerCase", "toUpperCase", "padStart", "padEnd", "repeat", "normalize", "replace", "replaceAll", "toString", "valueOf", "at", "concat", "split"]);
+// Array methods whose callback gets the receiver's elements: param 0, or (accumulator, element) for reduce*.
+export const ARRAY_CB = new Set(["forEach", "map", "filter", "flatMap", "find", "findIndex", "findLast", "findLastIndex", "some", "every", "reduce", "reduceRight"]);
 
 // TS nodes whose `expression` is a runtime value; every other Identifier under a TS node is type-level.
 export const TS_VALUES = new Set(["TSAsExpression", "TSSatisfiesExpression", "TSNonNullExpression", "TSTypeAssertion", "TSInstantiationExpression", "TSExportAssignment"]);

@@ -1,5 +1,5 @@
 import { type Node } from "@babel/types";
-import { PASS_FNS, PASS_METHODS, TS_VALUES } from "../semantics.js";
+import { ARRAY_CB, PASS_FNS, PASS_METHODS, TS_VALUES } from "../semantics.js";
 import type { Names } from "./names.js";
 import type { Walk } from "./walk.js";
 import type { Namespaces } from "./namespaces.js";
@@ -140,6 +140,16 @@ export function linkCalls(w: Walk, n: Names, ns: Namespaces) {
         if (f.type === "MemberExpression" && PASS_METHODS.has(keyOf(f)!)) {
             edge("FLOWS_TO", f.object, c);
             if (keyOf(f) === "concat") for (const a of c.arguments) if (a.type !== "SpreadElement") edge("FLOWS_TO", a, c);
+        }
+        // x.forEach(function (v) {...}): the receiver flows into the callback's element param (and reduce's accumulator).
+        // shortcut: by name only, like PASS_METHODS; no initial value -> accumulator and no Array.from(x, cb).
+        if (f.type === "MemberExpression" && ARRAY_CB.has(keyOf(f)!) && c.arguments[0]) {
+            const n = keyOf(f)!.startsWith("reduce") ? 2 : 1;
+            for (const fn of (callables(c.arguments[0]) ?? []) as Set<Node & { params: Node[] }>)
+                for (const p of fn.params.slice(0, n)) {
+                    const d = paramName(p) && binding(paramName(p)!);
+                    if (d) edge("FLOWS_TO", f.object, d);
+                }
         }
     };
     // The binding a formal parameter declares, if it's a plain name (destructured params need element/property flow).

@@ -30,6 +30,8 @@ const SRC: Record<string, string> = {
     globals: "const x = location.search;\nconsole.log(x);",
     builtins:
         "const h = decodeURIComponent(location.hash.slice(1)).trim();\nconst e = encodeURIComponent(location.hash);\nfunction unescape(s) {\n    return 'x';\n}\nconst u = unescape(location.hash);\nconst c = 'a'.concat(location.hash);",
+    arrayCallbacks:
+        "const q = location.search;\nq.split('&').forEach(function (v) { o[v][v] = 1; });\nq.split('&').map((m) => m);\nq.split('&').reduce(function (acc, el) { return acc; }, {});\nfunction named(k) { return k; }\nq.split('&').filter(named);\n[1, 2].forEach(function (z) { return z; });",
     // beyond the spec's list
     functionExpression: "const f = function internal() {\n    return internal;\n};",
     classExpression: "const C = class Internal {\n    method() {\n        return Internal;\n    }\n};",
@@ -781,6 +783,11 @@ test("semantic edges survive save() and reopen", async () => {
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
+});
+
+test("array-method callbacks: a tainted receiver reaches the element param (and reduce's accumulator)", async () => {
+    for (const to of ["v", "m", "acc", "el", "k"]) expect(await flows("arrayCallbacks", "location.search", to)).toBe(true);
+    expect(await flows("arrayCallbacks", "location.search", "z")).toBe(false); // an untainted receiver
 });
 
 test("builtin pass-through: decoders and string methods carry their input; encoders and shadowed names don't", async () => {
