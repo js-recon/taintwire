@@ -1,5 +1,5 @@
 import type { Node } from "@babel/types";
-import { flattenFiles } from "./flatten.js";
+import { flattenFiles } from "./flatten/index.js";
 import { parseAst, type Parser } from "./parse.js";
 import { COLUMNS, DEFAULT_PAIRS, relMaps, RELS, SCOPE, SCOPE_COLUMNS, SOURCE, type Edge, type Edges, type Rel, type Row, type ScopeRow } from "./schema.js";
 
@@ -46,7 +46,7 @@ export class PookieGraph {
         private readonly backend: Backend
     ) {}
 
-    // ponytail: unbounded per-file source cache for code(); add LRU eviction if graphs outgrow memory.
+    // shortcut: unbounded per-file source cache for code(); add LRU eviction if graphs outgrow memory.
     private readonly sources = new Map<string, string>();
 
     /**
@@ -168,7 +168,7 @@ export class PookieGraph {
 
     /** Run an openCypher query. For multi-statement input, returns the last statement's rows. */
     async query(cypher: string, params?: Record<string, unknown>): Promise<Record<string, unknown>[]> {
-        // ponytail: the prepared statement is never closed, which leaks in the WASM worker; cache or close if param queries get hot.
+        // shortcut: the prepared statement is never closed, which leaks in the WASM worker; cache or close if param queries get hot.
         const res = params ? await this.connection.execute(await this.connection.prepare(cypher), params) : await this.connection.query(cypher);
         return this.backend.rows(res);
     }

@@ -4,7 +4,7 @@
 export { CS_MAST_CONFIG, PARSER_OPTIONS, type Parser } from "./parse.js";
 export { RELATIONS, type ScopeKind } from "./schema.js";
 export { declared, isRef, scopeKind } from "./semantics.js";
-export { flatten, flattenFiles } from "./flatten.js";
+export { flatten, flattenFiles } from "./flatten/index.js";
 export { moduleLinks, planUnits, type ModuleLinks } from "./units.js";
 export {
     DEFAULT_THREADS,

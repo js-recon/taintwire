@@ -1,4 +1,5 @@
-import { flattenFiles } from "./flatten.js";
+import { pushTo } from "./flatten/util.js";
+import { flattenFiles } from "./flatten/index.js";
 import { parseAst, type Parser } from "./parse.js";
 
 /** Which bundler module ids a file registers (`defines`) and which it loads (`needs`), from one file alone. */
@@ -16,13 +17,13 @@ export function moduleLinks(code: string, filename: string, parser: Parser = "cs
  * loads, transitively. A unit contained in another one is dropped, so each file is still loaded with everything it
  * links to and the units cover every file. Files with no module registry (plain ES modules) are a unit each. Returned
  * in input order of each unit's first file, each unit's files in input order.
- * ponytail: links follow imports only, so a value passed between two importers of a shared module (A -> store -> B)
+ * shortcut: links follow imports only, so a value passed between two importers of a shared module (A -> store -> B)
  * is only found by one linked graph of every file; and each file is parsed twice (scan, then build), cache if time matters.
  */
 export function planUnits(links: Map<string, ModuleLinks>): string[][] {
     const files = [...links.keys()];
     const definedBy = new Map<string, string[]>();
-    for (const [f, l] of links) for (const id of l.defines) (definedBy.get(id) ?? definedBy.set(id, []).get(id)!).push(f);
+    for (const [f, l] of links) for (const id of l.defines) pushTo(definedBy, id, f);
     const order = new Map(files.map((f, i) => [f, i]));
     const closures = files.map((root) => {
         const seen = new Set([root]);

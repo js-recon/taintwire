@@ -75,7 +75,7 @@ export async function loadPgq(
         base,
         ...abs,
     ];
-    // ponytail: on Node 22/24 the permission model doesn't cover the network; the child removes fetch & co and the
+    // shortcut: on Node 22/24 the permission model doesn't cover the network; the child removes fetch & co and the
     // import hook blocks node: builtins. On Node >= 25, --permission without --allow-net blocks it outright.
     const stdout = await new Promise<string>((ok, fail) =>
         execFile(process.execPath, args, { timeout: timeoutMs, maxBuffer: 256 * 2 ** 20 }, (err, out, errOut) =>
