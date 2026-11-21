@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://taintwire.js-recon.io">
-    <img src="https://raw.githubusercontent.com/js-recon/taintwire/main/docs/static/img/banner.png" alt="taintwire" width="600">
+    <img src="https://raw.githubusercontent.com/js-recon/taintwire-docs/main/static/img/banner.png" alt="taintwire" width="600">
   </a>
 </p>
 
@@ -53,9 +53,9 @@ Both produce the same tree.
 - Scopes: `Scope {id, kind, file, signature, owner_signature}` nodes, one per lexical environment. `kind` is `global`/`module` (from `Program`), `function`, `class`, `static_block`, `catch` or `block` (nested blocks, lexical `for` loops, `switch`). `owner -[:CREATES_SCOPE]-> Scope`, `Scope -[:PARENT_SCOPE]-> Scope`, and every `DECLARES` target gets one `Identifier -[:IN_SCOPE]-> Scope`: `var` goes to the nearest function/static block/program scope, lexical bindings to the innermost scope, a function/class declaration's name outside it, a named function/class expression's name inside it. `signature` is `sha256("scope:<kind>:<owner hash>")`; `id` is deterministic from file + owner position.
 - `use -[:REFERS_TO]-> decl`: each lexical use of a name (not property names, keys, labels, import/export names or TS types) resolved up `PARENT_SCOPE` to its `DECLARES` target. Unresolved globals (`console`, `location`) get no edge.
 - `op -[:READS {access, access_signature}]-> decl` / `op -[:WRITES {...}]-> decl`: the operation that consumes or initializes/updates a binding (the use's parent for reads; the declarator, assignment, update or loop for writes). `access` is the exact `Identifier` occurrence's id, `access_signature` its hash. `obj.p = v` writes no binding.
-- `a -[:FLOWS_TO]-> b`: intra-procedural, flow-insensitive value flow. A variable's declaration summarises its value (writes flow in, reads flow out), so cycles are normal: query paths with `* ACYCLIC`. Flows through operators, templates, sequences, assignments, updates and into `return`; not yet through calls, members, destructuring, iteration or literals. See the [value-flow docs](docs/docs/implementation/value-flow.md).
+- `a -[:FLOWS_TO]-> b`: intra-procedural, flow-insensitive value flow. A variable's declaration summarises its value (writes flow in, reads flow out), so cycles are normal: query paths with `* ACYCLIC`. Flows through operators, templates, sequences, assignments, updates and into `return`; not yet through calls, members, destructuring, iteration or literals. See the [value-flow docs](https://github.com/js-recon/taintwire-docs/blob/main/docs/implementation/value-flow.md).
 - `call -[:CALLS {candidates}]-> fn`: a callsite statically resolved (through `REFERS_TO`, aliases, `(0, f)`, `?:`/`||`, IIFEs) to a local function. Resolved only if every definition of the callee binding is a known function; params, imports, members and globals stay unresolved.
-- `arg -[:ARGUMENT_TO {arg_index, callsite}]-> param` and `return -[:RETURNS_TO]-> call`: value flow across resolved calls (by position, rest params take the tail; no returns for async/generators). Query taint paths over `FLOWS_TO|ARGUMENT_TO|RETURNS_TO`. Context-insensitive. See the [call docs](docs/docs/implementation/calls.md).
+- `arg -[:ARGUMENT_TO {arg_index, callsite}]-> param` and `return -[:RETURNS_TO]-> call`: value flow across resolved calls (by position, rest params take the tail; no returns for async/generators). Query taint paths over `FLOWS_TO|ARGUMENT_TO|RETURNS_TO`. Context-insensitive. See the [call docs](https://github.com/js-recon/taintwire-docs/blob/main/docs/implementation/calls.md).
 - Every edge table exists from `open()`, so an empty relation is zero rows.
 - Node columns: `id, type, file, startOffset, endOffset, line, col, endLine, endCol, name, value, operator, props, hash`.
   - `name` (identifiers), `value` (literals, stringified; template `cooked`), `operator` are pulled out for querying.
@@ -74,8 +74,8 @@ npm run build
 
 ## Docs
 
-API and implementation docs are a Docusaurus site in [`docs/`](docs/):
+API and implementation docs are at https://taintwire.js-recon.io. The Docusaurus source is in [js-recon/taintwire-docs](https://github.com/js-recon/taintwire-docs):
 
 ```sh
-cd docs && npm install && npm start
+git clone https://github.com/js-recon/taintwire-docs && cd taintwire-docs && npm install && npm start
 ```

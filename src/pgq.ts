@@ -271,11 +271,12 @@ const loc = (r: Row): PgqLocation => {
  * Run `rules` on `graph`. Selectors are evaluated once per call however many rules share them. Flow modes for `from`:
  * strict follows FLOWS_TO|ARGUMENT_TO|RETURNS_TO from source node to sink node; lenient also widens both ends through
  * up to 3 wrapping expressions; deep repeats lenient for 4 rounds. A rule that fails is reported in `errors` and the
- * others still run.
+ * others still run. `onRule` is called after each rule, failed or not, with the number of rules done so far.
  */
 export async function runPgq(
     graph: PookieGraph,
-    rules: PGRule[]
+    rules: PGRule[],
+    onRule?: (done: number, rule: PGRule) => void
 ): Promise<{ findings: PgqFinding[]; errors: { ruleId: string; message: string }[] }> {
     const q: Query = async (cypher, params) => {
         try {
@@ -319,7 +320,7 @@ export async function runPgq(
 
     const findings: PgqFinding[] = [];
     const errors: { ruleId: string; message: string }[] = [];
-    for (const rule of rules) {
+    for (const [i, rule] of rules.entries()) {
         try {
             const seen = new Set<string>();
             for (const s of rule.return)
@@ -337,6 +338,7 @@ export async function runPgq(
         } catch (e) {
             errors.push({ ruleId: rule.id, message: (e as Error).message });
         }
+        onRule?.(i + 1, rule);
     }
     return { findings, errors };
 }

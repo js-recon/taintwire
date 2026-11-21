@@ -9,6 +9,5 @@
         "sourceMap": true,
         "skipLibCheck": true
     },
-    "include": ["./src/**/*"],
-    "exclude": ["./src/**/*.test.ts", "./src/test-utils.ts"]
+    "include": ["./src/**/*"]
 }
