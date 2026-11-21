@@ -14,7 +14,7 @@ export function flatten(ast: Node, file: string) {
 
 /**
  * Flatten several files into one set of rows and edges. Names resolve per file as in flatten(); what links the files
- * is the bundler's module registry (webpack 4/5 or Turbopack chunks), so a call into another chunk gets CALLS, ARGUMENT_TO and RETURNS_TO.
+ * is the bundler's module registry (webpack 4/5 or Turbopack chunks) or, for classic scripts, the shared global scope, so a call into another chunk gets CALLS, ARGUMENT_TO and RETURNS_TO.
  * With `parse`, each `eval("<string literal>")` is parsed and walked as code in the eval's scope, as a virtual file
  * `<file>#eval@<offset>` listed in `evals` (webpack's `devtool: "eval"` builds put every module body in one).
  * Also linked: ES-module chunks (Vite/Rollup/esbuild) through import/export. Passes, in order: walk, names,
@@ -22,7 +22,7 @@ export function flatten(ast: Node, file: string) {
  */
 export function flattenFiles(units: [Node, string][], { parse }: { parse?: (code: string) => Node } = {}) {
     const w = walk(units, parse);
-    const n = resolveNames(w);
+    const n = resolveNames(w, units.map(([, file]) => file));
     const m = linkRegistries(w, n);
     const ns = linkNamespaces(w, n, m, linkEsm(units, w, n, m));
     linkCalls(w, n, ns);

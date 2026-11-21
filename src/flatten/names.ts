@@ -4,15 +4,26 @@ import { pushTo } from "./util.js";
 import type { Walk } from "./walk.js";
 
 /** Resolve names once every binding is known: REFERS_TO, READS, WRITES, FLOWS_TO, and each binding's definitions. */
-export function resolveNames(w: Walk) {
-    const { idOf, edge, parentScope, bindings, declScope, selfNames, uses, notRef, f, declarer } = w;
-    // REFERS_TO: the nearest enclosing scope that binds the name. Unresolved names (globals, host APIs) get no edge.
+export function resolveNames(w: Walk, files: string[] = []) {
+    const { idOf, edge, parentScope, bindings, declScope, selfNames, uses, notRef, f, declarer, scopes } = w;
+    // Classic scripts on one page share the global scope: a name no scope of its own file binds is the top-level binding
+    // of another file, the last one in `files` order winning, as for var/function in a browser. An eval's virtual file isn't
+    // in `files`: its top level is the eval's scope, not the page's.
+    // shortcut: links top-level var/let/const/function only, not window.x = … property globals; add when a site needs it
+    const order = new Map(files.map((file, i) => [file, i]));
+    const globals = new Map<string, Node>();
+    for (const s of scopes
+        .filter((s) => s.kind === "global" && order.has(s.file!))
+        .sort((a, b) => order.get(a.file!)! - order.get(b.file!)!))
+        for (const [name, decl] of bindings.get(s.id!) ?? []) globals.set(name, decl);
+    // REFERS_TO: the nearest enclosing scope that binds the name, else another file's global. Unresolved names (host APIs) get no edge.
     const refers = new Map<Node, Node>();
     for (const [use, op, scope] of uses) {
         if (declScope.has(use) || notRef.has(use)) continue;
         const name = (use as Node & { name: string }).name;
         let decl: Node | undefined;
         for (let s = scope; s && !decl; s = parentScope.get(s)) decl = bindings.get(s)?.get(name);
+        decl ??= globals.get(name);
         if (!decl) continue;
         refers.set(use, decl);
         edge("REFERS_TO", use, decl);
