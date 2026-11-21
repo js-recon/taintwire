@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0-alpha.4 - 2026-11-21
+
+### Added
+
+- `addFiles()` links ES-module chunks (Vite/Rollup/esbuild): named, default and namespace imports, re-exports, `export *`, and `import()` (including Vite's preload wrapper, cs-mast's `Import` callee, Rolldown/Vite 8 template-literal specifiers, and exported getter-object namespaces read as `import().then(e => e.a)`). See [ES modules](https://taintwire.js-recon.io/next/bundlers/esm).
+- `addFiles()` links classic (non-module) scripts through the global scope they share. A name that no scope of its own file binds resolves to another file's top-level `var`, `let`, `const` or `function`, and the later file in the call's order wins. `window.x = …` properties aren't linked.
+- Progress callbacks: `addFiles(files, onProgress)` reports `(stage, done, total)` for its parse, link and load stages, and `runPgq(graph, rules, onRule)` reports `(done, rule)` after each rule.
+
+### Fixed
+
+- The parameters of array-method callbacks (`forEach`, `map`, `filter`, `reduce`, …) are tainted from the receiver, and `split()` passes its receiver through.
+- A crash (temporal dead zone) on preload-wrapped `import()`. `import()` callback parameters are now resolved to a fixpoint.
+
+### Changed
+
+- Internal: `core.ts` is split into parse, schema, semantics, flatten, units and graph modules, and `flattenFiles` into per-pass modules under `src/flatten/`. Tests moved to `test/`.
 ## 0.2.0-alpha.3 - 2026-11-09
 
 ### Added
