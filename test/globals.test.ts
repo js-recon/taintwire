@@ -60,3 +60,22 @@ test("the later script's declaration wins", async () => {
     await g.close();
     expect(to.map((r) => r.file)).toEqual(["b.js"]);
 });
+
+test("an undeclared assignment (sloppy-mode implicit global) flows to reads of that name", async () => {
+    const g = await PookieGraph.open();
+    await g.addFiles([
+        { filename: "h.js", code: `r = window.name; a.innerHTML = r + "a"; function f(){ b.innerHTML = r + "b" } f()` },
+        { filename: "i.js", code: `c.innerHTML = r + "c"; function g(r){ d.innerHTML = r + "d" } g(1)` },
+        // assigning a host property isn't a new variable: name/location reads stay host reads
+        { filename: "j.js", code: `location = window.name; e.innerHTML = location` },
+    ]);
+    const s = await sinks(g);
+    const isGlobal = await g.query(
+        "MATCH (i:Identifier {name: 'location'}) WHERE NOT EXISTS { MATCH (i)-[:REFERS_TO]->() } RETURN count(i) AS n"
+    );
+    await g.close();
+    // a, b (other scope) and c (other script) get it; d is g's own parameter r, e is the host location
+    expect(s.hit).toEqual(['r + "a"', 'r + "b"', 'r + "c"']);
+    expect(s.clean).toEqual(["location", 'r + "d"']);
+    expect(Number(isGlobal[0].n)).toBe(2);
+});
