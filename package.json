@@ -1,6 +1,6 @@
 {
     "name": "@js-recon/taintwire",
-    "version": "0.2.0-alpha.4",
+    "version": "0.2.0-alpha.5",
     "description": "Graph-based (LadybugDB/openCypher) AST and taint analysis for JavaScript",
     "type": "module",
     "main": "build/index.js",
