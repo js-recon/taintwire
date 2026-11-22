@@ -158,6 +158,40 @@ WHERE f.name = 'eval' AND a.idx = 0 RETURN n.id AS id, ${AT}`;
             await g.close();
         }
     });
+
+    // an if whose test reads the tainted value; a second query reads the first one's rows through $found
+    const guard: PGCypher = {
+        query: `MATCH (g:IfStatement)-[:SON {key: 'consequent'}]->(br)-[:SON*0..10]->(k), (g)-[:SON {key: 'test'}]->(n)
+WHERE k.id = $sink AND EXISTS { MATCH (n)-[:SON*0..10]->(x) WHERE x.id IN $flow }
+RETURN n.id AS id, 'if' AS kind, 'must be true' AS text, ${AT}`,
+    };
+    const inGuard: PGCypher = {
+        query: `MATCH (t)-[:SON*0..10]->(n:BinaryExpression) WHERE t.id IN $found
+RETURN n.id AS id, 'check' AS kind, n.operator AS text, ${AT}`,
+    };
+    test("interceptors report a guard on the tainted value, and later queries get $found", async () => {
+        const code = `var h = location.hash;
+if (h.length > 3) { document.body.innerHTML = h; }
+if (window.debug) { document.body.innerHTML = location.search; }`;
+        const { findings, errors } = await run(code, [rule({ interceptors: [guard, inGuard] })]);
+        expect(errors).toEqual([]);
+        const byLine = Object.fromEntries(findings.map((f) => [f.line, f.interceptors]));
+        expect(byLine[2]?.map((i) => `${i.kind} ${i.text} ${i.line}:${i.col}`)).toEqual(["if must be true 2:4", "check > 2:4"]);
+        expect(byLine[3]).toBeUndefined(); // window.debug doesn't read the taint
+    });
+
+    test("validatePgq checks a selector's interceptor queries and their parameters", () => {
+        expect(taintwire.validatePgq(rule({ interceptors: [guard] }))).toEqual([]);
+        expect(taintwire.validatePgq(rule({ interceptors: [{ query: "MATCH (n) WHERE n.id = $nope RETURN n" }] }))).toEqual([
+            "url_html.return[0].interceptors[0]: $nope isn't one of $sink, $source, $flow, $found",
+        ]);
+        expect(taintwire.validatePgq(rule({ interceptors: {} as never }))).toEqual([
+            "url_html.return[0].interceptors: expected a list of PGCypher",
+        ]);
+        expect(taintwire.validatePgq({ ...rule(), return: [{ cypher: htmlSink, interceptors: [guard] }] })).toEqual([
+            "url_html.return[0]: interceptors only apply with from",
+        ]);
+    });
 });
 
 describe("read-only open", { timeout: 60000 }, () => {

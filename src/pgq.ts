@@ -26,6 +26,13 @@ export interface PGSelector {
     mode?: PGMode;
     /** Longest flow kept, in hops (default 8). */
     maxHops?: number;
+    /**
+     * What could stop a value at this sink: queries run once per finding of this selector (in a rule's `return`, with `from`), to
+     * report what stands between source and sink (a guard condition, a sanitizer). Parameters: `$sink` and `$source`
+     * (node ids), `$flow` (the source and every node it reaches) and `$found` (the ids the earlier interceptor
+     * queries returned, in order). Each must `RETURN id, file, line, col, kind, text`.
+     */
+    interceptors?: PGCypher[];
 }
 
 /** A rule: its findings are the rows of the `return` selectors. */
@@ -55,7 +62,18 @@ export interface PgqFinding extends PgqLocation {
     /** Where the value came from, for a selector with `from`. */
     source?: PgqLocation;
     hops?: number;
+    /** Rows of the sink selector's `interceptors`. */
+    interceptors?: PgqInterceptor[];
 }
+
+/** What an interceptor query found between a finding's source and sink: a guard condition, a sanitizer. */
+export interface PgqInterceptor extends PgqLocation {
+    kind: string;
+    text: string;
+}
+
+/** The parameters an interceptor query gets. */
+export const INTERCEPTOR_PARAMS = ["sink", "source", "flow", "found"] as const;
 
 export const DEFAULT_MAX_HOPS = 8;
 const PARAM = /^[A-Za-z_]\w*$/;
@@ -111,6 +129,19 @@ export function validatePgq(input: unknown): string[] {
             errors.push(`${at}.maxHops: expected a non-negative integer`);
         if ((sel.mode !== undefined || sel.maxHops !== undefined) && sel.from === undefined)
             errors.push(`${at}: mode/maxHops only apply with from`);
+        if (sel.interceptors !== undefined) {
+            if (sel.from === undefined) errors.push(`${at}: interceptors only apply with from`);
+            if (!Array.isArray(sel.interceptors)) errors.push(`${at}.interceptors: expected a list of PGCypher`);
+            else
+                sel.interceptors.forEach((c, j) => {
+                    const cat = `${at}.interceptors[${j}]`;
+                    if (!isCypher(c) || typeof c.query !== "string" || !c.query.trim())
+                        return void errors.push(`${cat}: expected {query: "<non-empty Cypher>"}`);
+                    for (const p of cypherParams(c.query))
+                        if (!(INTERCEPTOR_PARAMS as readonly string[]).includes(p))
+                            errors.push(`${cat}: $${p} isn't one of $${INTERCEPTOR_PARAMS.join(", $")}`);
+                });
+        }
         const next = [...path, s];
         for (const [k, d] of Object.entries(isObj(sel.uses) ? sel.uses : {})) {
             if (!PARAM.test(k)) errors.push(`${at}.uses.${k}: a parameter name is letters, digits and _`);
@@ -151,22 +182,24 @@ export async function checkPgqCypher(graph: PookieGraph, rules: PGRule[]): Promi
     const errors: string[] = [];
     const seen = new Set<string>();
     const visit = async (s: PGSelector, at: string) => {
-        for (const c of cyphers(s)) {
-            if (seen.has(c.query)) continue;
-            seen.add(c.query);
-            try {
-                const stmt = (await graph.connection.prepare(c.query)) as {
-                    isSuccess?(): boolean;
-                    getErrorMessage?(): string;
-                };
-                if (stmt?.isSuccess && !stmt.isSuccess()) throw new Error(stmt.getErrorMessage?.() ?? "prepare failed");
-            } catch (e) {
-                const msg = (e as Error).message;
-                if (!/does not exist/.test(msg)) errors.push(`${at}: ${msg}`);
-            }
-        }
+        for (const c of cyphers(s)) await check(c, at);
+        for (const [i, c] of (s.interceptors ?? []).entries()) await check(c, `${at}.interceptors[${i}]`);
         for (const [k, d] of Object.entries(s.uses ?? {})) await visit(d, `${at}.uses.${k}`);
         for (const f of froms(s)) await visit(f, `${at}.from`);
+    };
+    const check = async (c: PGCypher, at: string) => {
+        if (seen.has(c.query)) return;
+        seen.add(c.query);
+        try {
+            const stmt = (await graph.connection.prepare(c.query)) as {
+                isSuccess?(): boolean;
+                getErrorMessage?(): string;
+            };
+            if (stmt?.isSuccess && !stmt.isSuccess()) throw new Error(stmt.getErrorMessage?.() ?? "prepare failed");
+        } catch (e) {
+            const msg = (e as Error).message;
+            if (!/does not exist/.test(msg)) errors.push(`${at}: ${msg}`);
+        }
     };
     for (const r of rules) for (const [i, s] of r.return.entries()) await visit(asSelector(s), `${r.id}.return[${i}]`);
     return errors;
@@ -318,23 +351,52 @@ export async function runPgq(
             .map((h) => ({ row: byId.get(h.sink)!, source: sources.get(h.source), hops: h.hops }));
     };
 
+    // $flow of a source: the expressions wrapping it (as lenient widens) and every node they reach.
+    // shortcut: one lenient round, so a value past two opaque calls isn't in $flow; add deep rounds if guards go missing.
+    const flowOf = new Map<string, Promise<string[]>>();
+    const flowIds = async (source: string): Promise<string[]> => {
+        const S = [...(await widen(q, WIDEN_SOURCE, "S", [source])).keys()];
+        return [...new Set([...S, ...(await q(REACH, { S })).map((r) => r.x as string)])];
+    };
+    const intercept = async (queries: PGCypher[], sink: string, source: string): Promise<PgqInterceptor[]> => {
+        if (!flowOf.has(source)) flowOf.set(source, flowIds(source));
+        const all = { sink, source, flow: await flowOf.get(source)!, found: [] as string[] };
+        const out = new Map<string, PgqInterceptor>();
+        for (const c of queries) {
+            // only the params the query names: Ladybug rejects a parameter the query doesn't use
+            const params = Object.fromEntries(cypherParams(c.query).map((p) => [p, all[p as keyof typeof all]]));
+            for (const r of await q(c.query, params)) {
+                if (r.kind == null || r.text == null) throw new Error("an interceptor query must RETURN kind and text");
+                const it = { ...loc(r), kind: String(r.kind), text: String(r.text) };
+                out.set(`${it.id}\0${it.kind}\0${it.text}`, it);
+                all.found.push(it.id);
+            }
+        }
+        return [...out.values()].sort((a, b) => a.line - b.line || a.col - b.col);
+    };
+
     const findings: PgqFinding[] = [];
     const errors: { ruleId: string; message: string }[] = [];
     for (const [i, rule] of rules.entries()) {
         try {
             const seen = new Set<string>();
-            for (const s of rule.return)
-                for (const m of await evaluate(asSelector(s))) {
+            for (const r of rule.return) {
+                const s = asSelector(r);
+                for (const m of await evaluate(s)) {
                     if (seen.has(m.row.id)) continue;
                     seen.add(m.row.id);
+                    const interceptors =
+                        m.source && s.interceptors?.length ? await intercept(s.interceptors, m.row.id, m.source.id) : [];
                     findings.push({
                         ruleId: rule.id,
                         severity: rule.severity,
                         message: rule.message,
                         ...loc(m.row),
                         ...(m.source && { source: loc(m.source), hops: m.hops }),
+                        ...(interceptors.length ? { interceptors } : {}),
                     });
                 }
+            }
         } catch (e) {
             errors.push({ ruleId: rule.id, message: (e as Error).message });
         }
