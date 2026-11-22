@@ -12,6 +12,21 @@ In taintwire-docs, `docs/` is **Next** (served at `/next`): what's on its `dev`,
 
 Branding assets live in taintwire-docs `static/img/` (`banner.png`, `logo.png`, `favicon.ico`; PNGs downscaled from the originals with `sips -Z`, favicon converted with `ffmpeg`). The README pulls the banner from `raw.githubusercontent.com/js-recon/taintwire-docs/main/...` so it renders on npmjs.com too.
 
+## Docs hosting (Cloudflare Pages)
+
+The `Cloudflare Pages: taintwire` / `taintwire-dev` checks on taintwire-docs come from two Pages projects with git integration on `js-recon/taintwire-docs`: `taintwire` (production branch `main`, taintwire.js-recon.io) and `taintwire-dev` (production branch `dev`, taintwire.stage.js-recon.io). Each also builds previews of every other branch. Build config: `npm run build`, output `build`, root dir `""` (the repo root; it was `docs` from when the site lived in the taintwire repo, which failed every deploy with `Output directory "docs/build" not found`).
+
+Wrangler (`npx wrangler`, logged in with OAuth, `npx wrangler whoami`) lists projects (`npx wrangler pages project list`) but can't read or change the git build config, read build logs, or retry git deploys. For those, call the API with wrangler's token:
+
+```bash
+T=$(grep -E '^oauth_token' ~/.config/.wrangler/config/default.toml | cut -d'"' -f2)
+B="https://api.cloudflare.com/client/v4/accounts/<account id from whoami>/pages/projects"
+curl -s -H "Authorization: Bearer $T" "$B/taintwire" | jq '.result.build_config'                       # config
+curl -s -H "Authorization: Bearer $T" "$B/taintwire/deployments/<id>/history/logs" | jq -r '.result.data[].line'  # build log
+curl -s -X PATCH -H "Authorization: Bearer $T" -H "Content-Type: application/json" "$B/taintwire" -d '{"build_config":{...}}'
+curl -s -X POST -H "Authorization: Bearer $T" "$B/taintwire/deployments/<id>/retry"                   # re-run; updates the GitHub check
+```
+
 ## Branches
 
 `main` is release-only and only takes `dev` through a PR. Do day-to-day work on `dev` or on feature branches off `dev`.

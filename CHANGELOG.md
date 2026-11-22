@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0-alpha.5 - 2026-11-22
+
+### Added
+
+- Interceptors: a sink selector with `from` can list `interceptors`, Cypher queries that run once per finding with `$sink`, `$source`, `$flow` (the source and every node it reaches) and `$found` (the ids the earlier interceptor queries returned). Each returns `id, file, line, col, kind, text`. The rows land on `PgqFinding.interceptors`, deduplicated and sorted by position. They describe what stands between the source and the sink, such as the `if` a payload must pass. See [Interceptors](https://taintwire.js-recon.io/next/api/pgq#interceptors).
+- `validatePgq` and `checkPgqCypher` check interceptor queries: they must be a list of PGCypher on a selector with `from`, and use no params other than the four above.
+
 ## 0.2.0-alpha.4 - 2026-11-21
 
 ### Added
