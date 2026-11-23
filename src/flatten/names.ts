@@ -3,6 +3,11 @@ import { hashOf } from "../parse.js";
 import { pushTo } from "./util.js";
 import type { Walk } from "./walk.js";
 
+// Window properties that already exist: assigning one (`location = u`, `onload = f`) sets the host property, it doesn't
+// create a variable, so it must not feed later reads of that name.
+const HOST_GLOBAL =
+    /^(on.*|location|name|status|document|window|self|top|parent|opener|frames|origin|history|navigator|closed|length|event|globalThis|undefined|NaN|Infinity)$/;
+
 /** Resolve names once every binding is known: REFERS_TO, READS, WRITES, FLOWS_TO, and each binding's definitions. */
 export function resolveNames(w: Walk, files: string[] = []) {
     const { idOf, edge, parentScope, bindings, declScope, selfNames, uses, notRef, f, declarer, scopes } = w;
@@ -18,13 +23,17 @@ export function resolveNames(w: Walk, files: string[] = []) {
         for (const [name, decl] of bindings.get(s.id!) ?? []) globals.set(name, decl);
     // REFERS_TO: the nearest enclosing scope that binds the name, else another file's global. Unresolved names (host APIs) get no edge.
     const refers = new Map<Node, Node>();
+    const unboundReads = new Map<string, Node[]>();
     for (const [use, op, scope] of uses) {
         if (declScope.has(use) || notRef.has(use)) continue;
         const name = (use as Node & { name: string }).name;
         let decl: Node | undefined;
         for (let s = scope; s && !decl; s = parentScope.get(s)) decl = bindings.get(s)?.get(name);
         decl ??= globals.get(name);
-        if (!decl) continue;
+        if (!decl) {
+            if (!f.writeOnly.has(use)) pushTo(unboundReads, name, use);
+            continue;
+        }
         refers.set(use, decl);
         edge("REFERS_TO", use, decl);
         // An export specifier names the binding without reading it.
@@ -43,6 +52,10 @@ export function resolveNames(w: Walk, files: string[] = []) {
     for (const [v, t] of f.stores) {
         const d = binding(t);
         if (d) edge("FLOWS_TO", v, d);
+        // Sloppy-mode `x = v` with no declaration anywhere creates a page global (common in inline event handlers):
+        // flow v to every unbound read of x. No REFERS_TO, so a host global (no REFERS_TO) still reads as one.
+        else if (t.type === "Identifier" && !HOST_GLOBAL.test(t.name))
+            for (const r of unboundReads.get(t.name) ?? []) edge("FLOWS_TO", v, r);
     }
 
     // A binding's definitions: each value written to it (null if unknown), and what its declarations bind. A function
