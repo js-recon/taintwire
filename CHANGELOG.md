@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0-alpha.6 - 2026-11-23
+
+### Fixed
+
+- A sloppy-mode assignment `x = v` with no declaration of `x` anywhere creates a page global, but the write had no binding, so `v` never reached later reads of `x`. Inline event handlers are often written this way. `v` now flows to every unbound read of `x` in any scope and any file of the same `addFiles()` call. No `REFERS_TO` edge is added, so those reads stay globals. Assignments to existing `window` properties (`location`, `name`, `on*`, ...) are excluded.
+
 ## 0.2.0-alpha.5 - 2026-11-22
 
 ### Added
