@@ -33,6 +33,14 @@ export interface PGSelector {
      * queries returned, in order). Each must `RETURN id, file, line, col, kind, text`.
      */
     interceptors?: PGCypher[];
+    /**
+     * How the value ends up in this sink: queries run once per finding, like `interceptors`, to report the fixed
+     * structure around the tainted part (a same-origin path, a query string, a selector prefix, a sink API that
+     * confines its argument). Parameters: `$sink`, `$source`, `$flow` (every node the source reaches, as the rule's
+     * deep flow does) and `$path` (the node ids from source to sink, in order). Each must `RETURN id, file, line,
+     * col, kind, text`.
+     */
+    confinements?: PGCypher[];
 }
 
 /** A rule: its findings are the rows of the `return` selectors. */
@@ -64,6 +72,8 @@ export interface PgqFinding extends PgqLocation {
     hops?: number;
     /** Rows of the sink selector's `interceptors`. */
     interceptors?: PgqInterceptor[];
+    /** Rows of the sink selector's `confinements`. */
+    confinements?: PgqConfinement[];
 }
 
 /** What an interceptor query found between a finding's source and sink: a guard condition, a sanitizer. */
@@ -72,8 +82,13 @@ export interface PgqInterceptor extends PgqLocation {
     text: string;
 }
 
+/** How a finding's tainted value ends up in its sink: the fixed structure around it that limits what it can do. */
+export type PgqConfinement = PgqInterceptor;
+
 /** The parameters an interceptor query gets. */
 export const INTERCEPTOR_PARAMS = ["sink", "source", "flow", "found"] as const;
+/** The parameters a confinement query gets. */
+export const CONFINEMENT_PARAMS = ["sink", "source", "flow", "path"] as const;
 
 export const DEFAULT_MAX_HOPS = 8;
 const PARAM = /^[A-Za-z_]\w*$/;
@@ -129,17 +144,22 @@ export function validatePgq(input: unknown): string[] {
             errors.push(`${at}.maxHops: expected a non-negative integer`);
         if ((sel.mode !== undefined || sel.maxHops !== undefined) && sel.from === undefined)
             errors.push(`${at}: mode/maxHops only apply with from`);
-        if (sel.interceptors !== undefined) {
-            if (sel.from === undefined) errors.push(`${at}: interceptors only apply with from`);
-            if (!Array.isArray(sel.interceptors)) errors.push(`${at}.interceptors: expected a list of PGCypher`);
+        for (const [key, allowed] of [
+            ["interceptors", INTERCEPTOR_PARAMS],
+            ["confinements", CONFINEMENT_PARAMS],
+        ] as const) {
+            const list = sel[key];
+            if (list === undefined) continue;
+            if (sel.from === undefined) errors.push(`${at}: ${key} only apply with from`);
+            if (!Array.isArray(list)) errors.push(`${at}.${key}: expected a list of PGCypher`);
             else
-                sel.interceptors.forEach((c, j) => {
-                    const cat = `${at}.interceptors[${j}]`;
+                list.forEach((c, j) => {
+                    const cat = `${at}.${key}[${j}]`;
                     if (!isCypher(c) || typeof c.query !== "string" || !c.query.trim())
                         return void errors.push(`${cat}: expected {query: "<non-empty Cypher>"}`);
                     for (const p of cypherParams(c.query))
-                        if (!(INTERCEPTOR_PARAMS as readonly string[]).includes(p))
-                            errors.push(`${cat}: $${p} isn't one of $${INTERCEPTOR_PARAMS.join(", $")}`);
+                        if (!(allowed as readonly string[]).includes(p))
+                            errors.push(`${cat}: $${p} isn't one of $${allowed.join(", $")}`);
                 });
         }
         const next = [...path, s];
@@ -184,6 +204,7 @@ export async function checkPgqCypher(graph: PookieGraph, rules: PGRule[]): Promi
     const visit = async (s: PGSelector, at: string) => {
         for (const c of cyphers(s)) await check(c, at);
         for (const [i, c] of (s.interceptors ?? []).entries()) await check(c, `${at}.interceptors[${i}]`);
+        for (const [i, c] of (s.confinements ?? []).entries()) await check(c, `${at}.confinements[${i}]`);
         for (const [k, d] of Object.entries(s.uses ?? {})) await visit(d, `${at}.uses.${k}`);
         for (const f of froms(s)) await visit(f, `${at}.from`);
     };
@@ -232,6 +253,12 @@ RETURN s.id AS s, x.id AS x, length(p) AS hops`;
 const REACH = `MATCH p = (s)-[:FLOWS_TO|ARGUMENT_TO|RETURNS_TO* SHORTEST 1..30]->(x)
 WHERE s.id IN $S
 RETURN s.id AS s, x.id AS x, length(p) AS hops`;
+// REACH plus the node ids of each path, to rebuild the route a finding's value took.
+const REACH_PATH = `MATCH p = (s)-[:FLOWS_TO|ARGUMENT_TO|RETURNS_TO* SHORTEST 1..30]->(x)
+WHERE s.id IN $S
+RETURN x.id AS x, properties(nodes(p), 'id') AS ids`;
+const SINK_CHAIN = `MATCH p = (k)-[e:SON*1..3]->(y) WHERE k.id = $k AND y.id = $y
+RETURN properties(nodes(p), 'id') AS ids LIMIT 1`;
 // Deep mode rounds: each one gets a value past one more opaque call or member read.
 const DEEP_ROUNDS = 4;
 
@@ -358,21 +385,69 @@ export async function runPgq(
         const S = [...(await widen(q, WIDEN_SOURCE, "S", [source])).keys()];
         return [...new Set([...S, ...(await q(REACH, { S })).map((r) => r.x as string)])];
     };
-    const intercept = async (queries: PGCypher[], sink: string, source: string): Promise<PgqInterceptor[]> => {
-        if (!flowOf.has(source)) flowOf.set(source, flowIds(source));
-        const all = { sink, source, flow: await flowOf.get(source)!, found: [] as string[] };
+    // Rows of `queries` with these params, deduplicated by (id, kind, text) and sorted by position. Each row's id is
+    // appended to `found` when the queries get one.
+    const annotate = async (queries: PGCypher[], all: Record<string, unknown> & { found?: string[] }) => {
         const out = new Map<string, PgqInterceptor>();
         for (const c of queries) {
             // only the params the query names: Ladybug rejects a parameter the query doesn't use
-            const params = Object.fromEntries(cypherParams(c.query).map((p) => [p, all[p as keyof typeof all]]));
+            const params = Object.fromEntries(cypherParams(c.query).map((p) => [p, all[p]]));
             for (const r of await q(c.query, params)) {
-                if (r.kind == null || r.text == null) throw new Error("an interceptor query must RETURN kind and text");
+                if (r.kind == null || r.text == null) throw new Error("an annotation query must RETURN kind and text");
                 const it = { ...loc(r), kind: String(r.kind), text: String(r.text) };
                 out.set(`${it.id}\0${it.kind}\0${it.text}`, it);
-                all.found.push(it.id);
+                all.found?.push(it.id);
             }
         }
         return [...out.values()].sort((a, b) => a.line - b.line || a.col - b.col);
+    };
+    const intercept = async (queries: PGCypher[], sink: string, source: string): Promise<PgqInterceptor[]> => {
+        if (!flowOf.has(source)) flowOf.set(source, flowIds(source));
+        return annotate(queries, { sink, source, flow: await flowOf.get(source)!, found: [] });
+    };
+
+    // The deep reach of one source, as the rule's flow follows it, with the node each one was reached from (the
+    // source maps to null). Confinements need it: a source behind `new URLSearchParams(...).get(k)` and `parseInt`
+    // is only reached in deep rounds.
+    const traceOf = new Map<string, Promise<Map<string, string | null>>>();
+    const traceIds = async (source: string): Promise<Map<string, string | null>> => {
+        const parent = new Map<string, string | null>([[source, null]]);
+        let frontier = [source];
+        for (let i = 0; i < DEEP_ROUNDS && frontier.length; i++) {
+            for (const r of await q(WIDEN_SOURCE, { S: frontier })) {
+                if (!parent.has(r.id)) {
+                    parent.set(r.id, r.anchor); // the wrapper was reached from the expression inside it
+                    frontier.push(r.id);
+                }
+            }
+            const before = new Set(parent.keys());
+            const next = new Set<string>();
+            for (const r of await q(REACH_PATH, { S: frontier })) {
+                const ids = r.ids as string[];
+                for (let j = 1; j < ids.length; j++) if (!parent.has(ids[j])) parent.set(ids[j], ids[j - 1]);
+                if (!before.has(r.x)) next.add(r.x);
+            }
+            frontier = [...next];
+        }
+        return parent;
+    };
+    // The node ids from source to sink, in order. The flow may end inside the sink expression (lenient widening),
+    // so the SON chain from there up to the sink closes the path.
+    const pathIds = async (parent: Map<string, string | null>, sink: string): Promise<string[]> => {
+        const y = [...(await widen(q, WIDEN_SINK, "X", [sink])).keys()].find((id) => parent.has(id));
+        if (y === undefined) return [];
+        const path: string[] = [];
+        for (let n: string | null | undefined = y; n != null && !path.includes(n); n = parent.get(n)) path.unshift(n);
+        if (y !== sink) {
+            const [r] = await q(SINK_CHAIN, { k: sink, y });
+            if (r) path.push(...(r.ids as string[]).slice(0, -1).reverse());
+        }
+        return path;
+    };
+    const confine = async (queries: PGCypher[], sink: string, source: string): Promise<PgqConfinement[]> => {
+        if (!traceOf.has(source)) traceOf.set(source, traceIds(source));
+        const parent = await traceOf.get(source)!;
+        return annotate(queries, { sink, source, flow: [...parent.keys()], path: await pathIds(parent, sink) });
     };
 
     const findings: PgqFinding[] = [];
@@ -387,6 +462,8 @@ export async function runPgq(
                     seen.add(m.row.id);
                     const interceptors =
                         m.source && s.interceptors?.length ? await intercept(s.interceptors, m.row.id, m.source.id) : [];
+                    const confinements =
+                        m.source && s.confinements?.length ? await confine(s.confinements, m.row.id, m.source.id) : [];
                     findings.push({
                         ruleId: rule.id,
                         severity: rule.severity,
@@ -394,6 +471,7 @@ export async function runPgq(
                         ...loc(m.row),
                         ...(m.source && { source: loc(m.source), hops: m.hops }),
                         ...(interceptors.length ? { interceptors } : {}),
+                        ...(confinements.length ? { confinements } : {}),
                     });
                 }
             }
