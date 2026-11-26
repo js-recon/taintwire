@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0-alpha.7 - 2026-11-26
+
+### Added
+
+- Confinements: a sink selector with `from` can list `confinements`, Cypher queries that run once per finding, like interceptors, and report how the tainted value ends up in the sink (a same-origin path, a query string, a selector prefix, a sink API that confines its argument). They get `$sink`, `$source`, `$flow` (every node the source reaches, as the rule's deep flow follows it) and `$path` (the node ids from source to sink, in order). Each returns `id, file, line, col, kind, text`, and the rows land on `PgqFinding.confinements`. `validatePgq` and `checkPgqCypher` check them like interceptor queries. See [Confinements](https://taintwire.js-recon.io/next/api/pgq#confinements).
+
 ## 0.2.0-alpha.6 - 2026-11-23
 
 ### Fixed
