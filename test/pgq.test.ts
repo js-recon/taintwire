@@ -180,6 +180,37 @@ if (window.debug) { document.body.innerHTML = location.search; }`;
         expect(byLine[3]).toBeUndefined(); // window.debug doesn't read the taint
     });
 
+    test("confinements get the deep $flow and the ordered source-to-sink $path", async () => {
+        // a template on the path, past two opaque steps (the lenient interceptor $flow stops before p.get)
+        const code = `const p = new URLSearchParams(location.search), t = p.get("q");
+const u = \`<b>\${t}</b>\`;
+document.body.innerHTML = u;`;
+        const onPath: PGCypher = {
+            query: `MATCH (n) WHERE n.id IN $path AND n.type IN ['TemplateLiteral', 'CallExpression', 'NewExpression'] AND n.id <> $source
+  AND EXISTS { MATCH (s) WHERE s.id = $sink } AND EXISTS { MATCH (f) WHERE f.id IN $flow AND f.id = n.id }
+RETURN n.id AS id, n.type AS kind, cast(list_position($path, n.id), 'STRING') + '/' + cast(size($path), 'STRING') AS text, ${AT}`,
+        };
+        const { findings, errors } = await run(code, [rule({ confinements: [onPath] })]);
+        expect(errors).toEqual([]);
+        const got = findings[0].confinements!.map((c) => `${c.kind} ${c.line}`);
+        expect(got).toEqual(["NewExpression 1", "CallExpression 1", "TemplateLiteral 2"]);
+        // in order along the path, and the sink is last
+        const pos = findings[0].confinements!.map((c) => Number(c.text.split("/")[0]));
+        expect(pos).toEqual([...pos].sort((a, b) => a - b));
+        expect(findings[0].interceptors).toBeUndefined();
+    });
+
+    test("validatePgq checks confinement queries and their parameters", () => {
+        const q = { query: "MATCH (n) WHERE n.id IN $path RETURN n" };
+        expect(taintwire.validatePgq(rule({ confinements: [q] }))).toEqual([]);
+        expect(taintwire.validatePgq(rule({ confinements: [{ query: "MATCH (n) WHERE n.id IN $found RETURN n" }] }))).toEqual([
+            "url_html.return[0].confinements[0]: $found isn't one of $sink, $source, $flow, $path",
+        ]);
+        expect(taintwire.validatePgq({ ...rule(), return: [{ cypher: htmlSink, confinements: [q] }] })).toEqual([
+            "url_html.return[0]: confinements only apply with from",
+        ]);
+    });
+
     test("validatePgq checks a selector's interceptor queries and their parameters", () => {
         expect(taintwire.validatePgq(rule({ interceptors: [guard] }))).toEqual([]);
         expect(taintwire.validatePgq(rule({ interceptors: [{ query: "MATCH (n) WHERE n.id = $nope RETURN n" }] }))).toEqual([
